@@ -4,6 +4,7 @@
 #include "SDP810.h"
 #include <SensirionI2cScd4x.h>
 #include <SensirionI2cSfa3x.h>
+#include <SensirionI2CSgp41.h>  // Note: Uppercase 'C' in Sgp41
 
 // PMS5003 Configuration
 #define PMS_RX_PIN 16
@@ -16,7 +17,8 @@
 // I2C Addresses
 #define SDP810_I2C_ADDRESS 0x25
 #define SCD40_I2C_ADDRESS 0x62
-#define SFA30_I2C_ADDRESS 0x5D  // Use 0x5A if SEL pin is grounded
+#define SFA30_I2C_ADDRESS 0x5D  // 0x5D or 0x5A
+#define SGP41_I2C_ADDRESS 0x59
 
 // Macro for error handling
 #ifdef NO_ERROR
@@ -29,6 +31,7 @@ PMS5003 pmsSensor(Serial2, PMS_RX_PIN, PMS_TX_PIN);
 SDP810 sdpSensor(Wire, SDP810_I2C_ADDRESS);
 SensirionI2cScd4x scd40;
 SensirionI2cSfa3x sfaSensor;
+SensirionI2CSgp41 sgp41;  // Note: Uppercase 'C' in Sgp41
 
 // Timing
 unsigned long lastDisplayTime = 0;
@@ -39,11 +42,16 @@ bool pmsActive = false;
 bool sdpActive = false;
 bool scdActive = false;
 bool sfaActive = false;
+bool sgpActive = false;
 
 // Error tracking
 int scdErrorCount = 0;
 int sfaErrorCount = 0;
+int sgpErrorCount = 0;
 const int MAX_ERRORS = 5;
+
+// SGP41 conditioning time (10 seconds required for NOx)
+uint16_t sgpConditioningTime = 10; // seconds
 
 // Data structures
 struct SFA30Data {
@@ -64,24 +72,44 @@ struct SCD40Data {
     unsigned long lastRead;
 };
 
+struct SGP41Data {
+    uint16_t voc;        // VOC signal (raw)
+    uint16_t nox;        // NOx signal (raw)
+    float vocIndex;      // Calculated VOC index (0-500)
+    float noxIndex;      // Calculated NOx index (1-5)
+    bool valid;
+    int errorCount;
+    bool conditioning;   // True during first 10 seconds
+};
+
 SFA30Data sfaData = {0, 0, 0, false, 0};
 SCD40Data scdData = {0, 0, 0, false, 0, false, 0};
+SGP41Data sgpData = {0, 0, 0.0, 0.0, false, 0, true};
 
 // Function declarations
 String getCO2Quality(uint16_t co2);
 String getCO2Recommendation(uint16_t co2);
 String getHCHOQuality(float hcho_ppb);
+String getVOCQuality(float vocIndex);
+String getNOxQuality(float noxIndex);
 void printSensorStatus();
 void printPMSData(const PMS5003::Data& data);
 void printSDPData(const SDP810::Data& data);
 void printSCDData(const SCD40Data& data);
 void printSFAData(const SFA30Data& data);
-void printOverallAirQuality(const PMS5003::Data& pmsData, const SCD40Data& scdData, const SFA30Data& sfaData);
+void printSGPData(const SGP41Data& data);
+void printOverallAirQuality(const PMS5003::Data& pmsData, const SCD40Data& scdData, 
+                           const SFA30Data& sfaData, const SGP41Data& sgpData);
 bool initSCD40();
 bool initSFA30();
+bool initSGP41();
 void readSCD40();
 void readSFA30();
+void readSGP41();
+float calculateVOCIndex(uint16_t rawVoc);
+float calculateNOxIndex(uint16_t rawNox);
 
+// Utility functions
 String getCO2Quality(uint16_t co2) {
     if (co2 < 450) return "Outdoor Fresh";
     else if (co2 < 800) return "Excellent";
@@ -106,6 +134,33 @@ String getHCHOQuality(float hcho_ppb) {
     else return "Hazardous";
 }
 
+String getVOCQuality(float vocIndex) {
+    if (vocIndex < 100) return "Excellent";
+    else if (vocIndex < 200) return "Good";
+    else if (vocIndex < 300) return "Moderate";
+    else if (vocIndex < 400) return "Poor";
+    else return "Unhealthy";
+}
+
+String getNOxQuality(float noxIndex) {
+    if (noxIndex < 1.5) return "Excellent";
+    else if (noxIndex < 2.5) return "Good";
+    else if (noxIndex < 3.5) return "Moderate";
+    else return "Poor";
+}
+
+float calculateVOCIndex(uint16_t rawVoc) {
+    // Convert raw VOC signal to VOC index (0-500)
+    // This is a simplified conversion - for accurate results use Sensirion's algorithm
+    return rawVoc / 10.0; // Simplified scaling
+}
+
+float calculateNOxIndex(uint16_t rawNox) {
+    // Convert raw NOx signal to NOx index (1-5)
+    // This is a simplified conversion
+    return 1.0 + (rawNox / 1000.0); // Simplified scaling
+}
+
 void printSensorStatus() {
     Serial.println("\n════════════════════════════════════════");
     Serial.println("          SENSOR STATUS");
@@ -114,6 +169,9 @@ void printSensorStatus() {
     Serial.printf("  SDP810:   %s\n", sdpActive ? "✓ ACTIVE" : "✗ INACTIVE");
     Serial.printf("  SCD40:    %s (%d errors)\n", scdActive ? "✓ ACTIVE" : "✗ INACTIVE", scdData.errorCount);
     Serial.printf("  SFA30:    %s (%d errors)\n", sfaActive ? "✓ ACTIVE" : "✗ INACTIVE", sfaData.errorCount);
+    Serial.printf("  SGP41:    %s (%d errors)", sgpActive ? "✓ ACTIVE" : "✗ INACTIVE", sgpData.errorCount);
+    if (sgpData.conditioning) Serial.print(" [CONDITIONING]");
+    Serial.println();
     Serial.println("════════════════════════════════════════\n");
 }
 
@@ -125,9 +183,6 @@ bool initSCD40() {
     
     // Stop any ongoing measurement
     int16_t error = scd40.stopPeriodicMeasurement();
-    if (error != NO_ERROR) {
-        // This is OK if no measurement was running
-    }
     delay(500);
     
     // Get serial number
@@ -184,19 +239,58 @@ bool initSFA30() {
     }
 }
 
+bool initSGP41() {
+    Serial.println("[SGP41] Initializing...");
+    
+    sgp41.begin(Wire);
+    delay(50);
+    
+    // Get serial number
+    uint8_t serialNumberSize = 3;
+    uint16_t serialNumber[serialNumberSize];
+    int16_t error = sgp41.getSerialNumber(serialNumber);
+    
+    if (error == NO_ERROR) {
+        Serial.print("  ✓ Detected! Serial: 0x");
+        for (size_t i = 0; i < serialNumberSize; i++) {
+            uint16_t value = serialNumber[i];
+            Serial.print(value < 4096 ? "0" : "");
+            Serial.print(value < 256 ? "0" : "");
+            Serial.print(value < 16 ? "0" : "");
+            Serial.print(value, HEX);
+        }
+        Serial.println();
+        
+        // Execute self-test
+        uint16_t testResult;
+        error = sgp41.executeSelfTest(testResult);
+        if (error == NO_ERROR && testResult == 0xD400) {
+            Serial.println("  ✓ Self-test passed");
+        } else {
+            Serial.print("  ⚠ Self-test issue: 0x");
+            Serial.println(testResult, HEX);
+        }
+        
+        return true;
+    } else {
+        Serial.println("  ✗ Not detected!");
+        return false;
+    }
+}
+
 void setup() {
     Serial.begin(115200);
     delay(2000);
     
     Serial.println("\n╔══════════════════════════════════════╗");
-    Serial.println("║  QUAD SENSOR AIR QUALITY MONITOR   ║");
-    Serial.println("║ PMS5003 + SDP810 + SCD40 + SFA30   ║");
+    Serial.println("║  5-SENSOR AIR QUALITY MONITOR       ║");
+    Serial.println("║ PMS5003 + SDP810 + SCD40 + SFA30 + SGP41║");
     Serial.println("╚══════════════════════════════════════╝\n");
     
     // ==================== I2C INITIALIZATION ====================
     Serial.println("[I2C] Initializing I2C bus...");
     Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-    Wire.setClock(100000);  // 100kHz standard speed
+    Wire.setClock(100000);  // 100kHz for stability
     delay(100);
     
     // ==================== PMS5003 INITIALIZATION ====================
@@ -224,6 +318,9 @@ void setup() {
     // ==================== SFA30 INITIALIZATION ====================
     sfaActive = initSFA30();
     
+    // ==================== SGP41 INITIALIZATION ====================
+    sgpActive = initSGP41();
+    
     // Display summary
     printSensorStatus();
     
@@ -231,7 +328,8 @@ void setup() {
     Serial.println("IMPORTANT NOTES:");
     Serial.println("1. SCD40 needs ~30 seconds warm-up");
     Serial.println("2. SFA30 needs ~10 seconds warm-up");
-    Serial.println("3. First readings may be inaccurate");
+    Serial.println("3. SGP41 needs 10 seconds NOx conditioning");
+    Serial.println("4. First readings may be inaccurate");
     Serial.println("──────────────────────────────────────");
     Serial.println("Starting measurements in 5 seconds...");
     delay(5000);
@@ -274,15 +372,11 @@ void readSCD40() {
             scdData.temperature = temp;
             scdData.humidity = hum;
             scdData.valid = true;
-            scdData.errorCount = 0; // Reset error count on success
+            scdData.errorCount = 0;
             scdData.lastRead = now;
         } else {
             scdData.valid = false;
             scdData.errorCount++;
-            
-            char errorMessage[128];
-            errorToString(error, errorMessage, sizeof(errorMessage));
-            Serial.printf("[SCD40] Read error: %s (Count: %d)\n", errorMessage, scdData.errorCount);
             
             if (scdData.errorCount >= MAX_ERRORS) {
                 scdActive = false;
@@ -310,18 +404,65 @@ void readSFA30() {
         sfaData.humidity = humidity;
         sfaData.temperature = temperature;
         sfaData.valid = true;
-        sfaData.errorCount = 0; // Reset error count on success
+        sfaData.errorCount = 0;
     } else {
         sfaData.valid = false;
         sfaData.errorCount++;
         
-        char errorMessage[128];
-        errorToString(error, errorMessage, sizeof(errorMessage));
-        Serial.printf("[SFA30] Read error: %s (Count: %d)\n", errorMessage, sfaData.errorCount);
-        
         if (sfaData.errorCount >= MAX_ERRORS) {
             sfaActive = false;
             Serial.println("[SFA30] Too many errors, disabling sensor");
+        }
+    }
+}
+
+void readSGP41() {
+    if (!sgpActive) return;
+    
+    static unsigned long lastRead = 0;
+    unsigned long now = millis();
+    
+    // Read SGP41 every 2 seconds
+    if (now - lastRead < 2000) return;
+    lastRead = now;
+    
+    // Default relative humidity and temperature for compensation
+    // 0x8000 = 50% RH, 0x6666 = 25°C (compensation not required but recommended)
+    uint16_t defaultRh = 0x8000;
+    uint16_t defaultT = 0x6666;
+    uint16_t srawVoc = 0;
+    uint16_t srawNox = 0;
+    
+    int16_t error;
+    
+    if (sgpData.conditioning && sgpConditioningTime > 0) {
+        // During NOx conditioning (first 10 seconds)
+        error = sgp41.executeConditioning(defaultRh, defaultT, srawVoc);
+        sgpConditioningTime--;
+        
+        if (sgpConditioningTime == 0) {
+            sgpData.conditioning = false;
+            Serial.println("[SGP41] NOx conditioning complete!");
+        }
+    } else {
+        // Normal measurement after conditioning
+        error = sgp41.measureRawSignals(defaultRh, defaultT, srawVoc, srawNox);
+    }
+    
+    if (error == NO_ERROR) {
+        sgpData.voc = srawVoc;
+        sgpData.nox = srawNox;
+        sgpData.vocIndex = calculateVOCIndex(srawVoc);
+        sgpData.noxIndex = calculateNOxIndex(srawNox);
+        sgpData.valid = true;
+        sgpData.errorCount = 0;
+    } else {
+        sgpData.valid = false;
+        sgpData.errorCount++;
+        
+        if (sgpData.errorCount >= MAX_ERRORS) {
+            sgpActive = false;
+            Serial.println("[SGP41] Too many errors, disabling sensor");
         }
     }
 }
@@ -397,6 +538,65 @@ void printSFAData(const SFA30Data& data) {
     Serial.println("└──────────────────────────────────────┘");
 }
 
+void printSGPData(const SGP41Data& data) {
+    if (!data.valid) {
+        if (data.conditioning) {
+            Serial.printf("[SGP41] Conditioning: %d seconds remaining\n", sgpConditioningTime);
+        } else {
+            Serial.println("[SGP41] No valid data yet");
+        }
+        return;
+    }
+    
+    String vocQuality = getVOCQuality(data.vocIndex);
+    String noxQuality = getNOxQuality(data.noxIndex);
+    
+    Serial.println("┌───────────── VOC/NOx SENSOR ───────────┐");
+    Serial.printf("│ VOC Raw:     %5d                   │\n", data.voc);
+    Serial.printf("│ VOC Index:   %5.1f (%s)     │\n", data.vocIndex, vocQuality.c_str());
+    Serial.printf("│ NOx Raw:     %5d                   │\n", data.nox);
+    Serial.printf("│ NOx Index:   %5.1f (%s)     │\n", data.noxIndex, noxQuality.c_str());
+    Serial.println("├──────────────────────────────────────┤");
+    Serial.println("│ VOC Index Scale:                    │");
+    Serial.println("│ 0-100   : Excellent                │");
+    Serial.println("│ 100-200 : Good                     │");
+    Serial.println("│ 200-300 : Moderate                 │");
+    Serial.println("│ 300-400 : Poor                     │");
+    Serial.println("│ >400    : Unhealthy                │");
+    Serial.println("└──────────────────────────────────────┘");
+}
+
+void printOverallAirQuality(const PMS5003::Data& pmsData, const SCD40Data& scdData, 
+                           const SFA30Data& sfaData, const SGP41Data& sgpData) {
+    int pm25_aqi = pmsSensor.calculateAQI(pmsData.pm25_standard);
+    String pm25_category = pmsSensor.getAQICategory(pm25_aqi);
+    String co2_quality = getCO2Quality(scdData.co2);
+    String hcho_quality = getHCHOQuality(sfaData.formaldehyde);
+    String voc_quality = getVOCQuality(sgpData.vocIndex);
+    
+    // Determine overall rating (worst sensor determines overall)
+    String overall = "Moderate";
+    bool excellent = (pm25_aqi <= 50 && scdData.co2 < 800 && 
+                      sfaData.formaldehyde < 80 && sgpData.vocIndex < 100);
+    bool poor = (pm25_aqi > 150 || scdData.co2 >= 1500 || 
+                 sfaData.formaldehyde >= 200 || sgpData.vocIndex >= 400);
+    bool unhealthySensitive = (pm25_aqi > 100 || scdData.co2 >= 1000 || 
+                               sfaData.formaldehyde >= 100 || sgpData.vocIndex >= 200);
+    
+    if (excellent) overall = "Excellent";
+    else if (poor) overall = "Poor";
+    else if (unhealthySensitive) overall = "Unhealthy for Sensitive";
+    
+    Serial.println("┌───────── OVERALL AIR QUALITY ─────────┐");
+    Serial.printf("│ PM2.5:  %3d μg/m³ (%s)    │\n", pmsData.pm25_standard, pm25_category.c_str());
+    Serial.printf("│ CO₂:    %5d ppm (%s)  │\n", scdData.co2, co2_quality.c_str());
+    Serial.printf("│ HCHO:   %6.1f ppb (%s)  │\n", sfaData.formaldehyde, hcho_quality.c_str());
+    Serial.printf("│ VOC:    %5.1f idx (%s)  │\n", sgpData.vocIndex, voc_quality.c_str());
+    Serial.println("├──────────────────────────────────────┤");
+    Serial.printf("│ Overall:   %-27s│\n", overall.c_str());
+    Serial.println("└──────────────────────────────────────┘");
+}
+
 void loop() {
     static PMS5003::Data pmsData;
     static SDP810::Data sdpData;
@@ -418,6 +618,7 @@ void loop() {
     // Read I2C sensors (with error recovery)
     readSCD40();
     readSFA30();
+    readSGP41();
     
     // ==================== DISPLAY DATA ====================
     if (millis() - lastDisplayTime >= DISPLAY_INTERVAL) {
@@ -457,9 +658,15 @@ void loop() {
         
         Serial.println();
         
+        // Display SGP41 data
+        printSGPData(sgpData);
+        
+        Serial.println();
+        
         // Display overall air quality if all sensors have data
-        if (pmsActive && scdActive && sfaActive && pmsOk && scdData.valid && sfaData.valid) {
-            printOverallAirQuality(pmsData, scdData, sfaData);
+        if (pmsActive && scdActive && sfaActive && sgpActive && 
+            pmsOk && scdData.valid && sfaData.valid && sgpData.valid) {
+            printOverallAirQuality(pmsData, scdData, sfaData, sgpData);
         }
         
         Serial.println("\n──────────────────────────────────────");
@@ -475,31 +682,4 @@ void loop() {
     
     // Small delay to prevent CPU overload
     delay(100);
-}
-
-void printOverallAirQuality(const PMS5003::Data& pmsData, const SCD40Data& scdData, const SFA30Data& sfaData) {
-    int pm25_aqi = pmsSensor.calculateAQI(pmsData.pm25_standard);
-    String pm25_category = pmsSensor.getAQICategory(pm25_aqi);
-    String co2_quality = getCO2Quality(scdData.co2);
-    String hcho_quality = getHCHOQuality(sfaData.formaldehyde);
-    
-    // Determine overall rating
-    String overall = "Moderate";
-    
-    // Simple logic - worst sensor determines overall
-    if (pm25_aqi <= 50 && scdData.co2 < 800 && sfaData.formaldehyde < 80) {
-        overall = "Good";
-    } else if (pm25_aqi > 150 || scdData.co2 >= 1500 || sfaData.formaldehyde >= 200) {
-        overall = "Poor";
-    } else if (pm25_aqi > 100 || scdData.co2 >= 1000 || sfaData.formaldehyde >= 100) {
-        overall = "Unhealthy for Sensitive";
-    }
-    
-    Serial.println("┌───────── OVERALL AIR QUALITY ─────────┐");
-    Serial.printf("│ PM2.5: %3d μg/m³ (%s)    │\n", pmsData.pm25_standard, pm25_category.c_str());
-    Serial.printf("│ CO₂:   %5d ppm (%s)  │\n", scdData.co2, co2_quality.c_str());
-    Serial.printf("│ HCHO:  %6.1f ppb (%s)  │\n", sfaData.formaldehyde, hcho_quality.c_str());
-    Serial.println("├──────────────────────────────────────┤");
-    Serial.printf("│ Overall:   %-27s│\n", overall.c_str());
-    Serial.println("└──────────────────────────────────────┘");
 }
