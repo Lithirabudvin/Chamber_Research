@@ -95,7 +95,7 @@ void loop() {
     float temperature = 0.0;
     
     // Read at 4-8 second intervals based on UART testing results
-    delay(8000);  // Start with 8 seconds to avoid timeout issues
+    delay(500);  // Start with 8 seconds to avoid timeout issues
     
     Serial.print("Reading sensor... ");
     
