@@ -1,357 +1,944 @@
 #include <Arduino.h>
 #include <Wire.h>
+#include "PMS5003.h"
+#include "SDP810.h"
+#include <SensirionI2cScd4x.h>
+#include <SensirionI2cSfa3x.h>
+#include <SensirionI2CSgp41.h>
+#include <Adafruit_SHT31.h>
 
-// Define the SGP41 I2C address
-#define SGP41_I2C_ADDRESS 0x59
+// PMS5003 Configuration (2 sensors)
+#define PMS_RX_PIN_1 16
+#define PMS_TX_PIN_1 17
+#define PMS_RX_PIN_2 18
+#define PMS_TX_PIN_2 19
 
-// Create two I2C instances
-TwoWire I2C_SGP41_1 = TwoWire(0);  // First I2C bus on pins 21, 22
-TwoWire I2C_SGP41_2 = TwoWire(1);  // Second I2C bus on pins 32, 33
+// I2C Configuration - Multiple buses for sensors with same addresses
+#define MAIN_I2C_SDA 21    // Main bus: SHT31 x2, SCD40, SDP810, SGP41 #1, SFA30 #1
+#define MAIN_I2C_SCL 22    // 
 
-// Time in seconds needed for NOx conditioning
-uint16_t conditioning_s = 10;
+#define SGP41_2_SDA 32     // Separate bus for SGP41 #2
+#define SGP41_2_SCL 33     // 
 
-// Temperature and Humidity values (set to your actual values)
-// Default: 25°C, 50% RH (you should replace with actual sensor values)
-float temperature = 25.0;  // °C
-float humidity = 50.0;     // %
+#define SFA30_2_SDA 25     // Separate bus for SFA30 #2
+#define SFA30_2_SCL 26     // 
 
-// Struct to hold sensor data
-struct SensorData {
-  uint16_t srawVoc = 0;
-  uint16_t srawNox = 0;
-  uint16_t serialNumber[3] = {0};
-  bool initialized = false;
-  String errorMessage = "";
-  float tvoc_index = 0;
-  float nox_index = 0;
+// I2C Addresses (fixed addresses for sensors that can't be changed)
+#define SDP810_I2C_ADDRESS 0x25
+#define SCD40_I2C_ADDRESS 0x62
+#define SFA30_I2C_ADDRESS 0x5D    // Fixed address for ALL SFA30 sensors
+#define SGP41_I2C_ADDRESS 0x59    // Fixed address for ALL SGP41 sensors
+#define SHT31_I2C_ADDRESS_1 0x44  // First SHT31 (ADDR to GND)
+#define SHT31_I2C_ADDRESS_2 0x45  // Second SHT31 (ADDR to 3.3V)
+
+// Macro for error handling
+#ifdef NO_ERROR
+#undef NO_ERROR
+#endif
+#define NO_ERROR 0
+
+// Create multiple I2C bus instances
+TwoWire I2C_MAIN = TwoWire(0);      // Bus 0: Main bus (pins 21,22)
+TwoWire I2C_SGP41_2 = TwoWire(1);   // Bus 1: SGP41 #2 (pins 32,33)
+TwoWire I2C_SFA30_2 = TwoWire(0);   // Bus 2: SFA30 #2 (pins 25,26)
+
+// Create sensor objects - each on their appropriate bus
+PMS5003 pmsSensor1(Serial2, PMS_RX_PIN_1, PMS_TX_PIN_1);
+PMS5003 pmsSensor2(Serial1, PMS_RX_PIN_2, PMS_TX_PIN_2);
+SDP810 sdpSensor(I2C_MAIN, SDP810_I2C_ADDRESS);  // On main bus
+SensirionI2cScd4x scd40;                         // Will use main bus
+SensirionI2cSfa3x sfaSensor1;                    // Will use main bus (21,22)
+SensirionI2cSfa3x sfaSensor2;                    // Will use SFA30_2 bus (25,26)
+SensirionI2CSgp41 sgp41_1;                       // Will use main bus
+SensirionI2CSgp41 sgp41_2;                       // Will use SGP41_2 bus
+Adafruit_SHT31 sht31_1 = Adafruit_SHT31(&I2C_MAIN);  // On main bus
+Adafruit_SHT31 sht31_2 = Adafruit_SHT31(&I2C_MAIN);  // On main bus
+
+// Timing
+unsigned long lastDisplayTime = 0;
+const unsigned long DISPLAY_INTERVAL = 5000;
+
+// Sensor status
+bool pmsActive1 = false;
+bool pmsActive2 = false;
+bool sdpActive = false;
+bool scdActive = false;
+bool sfaActive1 = false;
+bool sfaActive2 = false;
+bool sgpActive1 = false;
+bool sgpActive2 = false;
+bool shtActive1 = false;
+bool shtActive2 = false;
+
+// Error tracking
+const int MAX_ERRORS = 5;
+
+// Data structures
+struct SFA30Data {
+    float formaldehyde;  // ppb
+    float humidity;      // %RH
+    float temperature;   // °C
+    bool valid;
+    int errorCount;
 };
 
-SensorData sensor1, sensor2;
+struct SCD40Data {
+    uint16_t co2;        // ppm
+    float temperature;   // °C
+    float humidity;      // %RH
+    bool valid;
+    int errorCount;
+    bool dataReady;
+    unsigned long lastRead;
+};
+
+struct SGP41Data {
+    uint16_t voc;        // VOC signal (raw)
+    uint16_t nox;        // NOx signal (raw)
+    float vocIndex;      // Calculated VOC index (0-500)
+    float noxIndex;      // Calculated NOx index (1-5)
+    bool valid;
+    int errorCount;
+    bool conditioning;   // True during first 10 seconds
+};
+
+struct SHT31Data {
+    float temperature;   // °C
+    float humidity;      // %RH
+    bool heaterEnabled;  // Heater status
+    bool valid;
+    int errorCount;
+};
+
+struct PMSData {
+    uint16_t pm10_standard;
+    uint16_t pm25_standard;
+    uint16_t pm100_standard;
+    bool valid;
+    int errorCount;
+};
+
+// Sensor data instances
+PMSData pmsData1 = {0, 0, 0, false, 0};
+PMSData pmsData2 = {0, 0, 0, false, 0};
+SFA30Data sfaData1 = {0, 0, 0, false, 0};
+SFA30Data sfaData2 = {0, 0, 0, false, 0};
+SCD40Data scdData = {0, 0, 0, false, 0, false, 0};
+SGP41Data sgpData1 = {0, 0, 0.0, 0.0, false, 0, true};
+SGP41Data sgpData2 = {0, 0, 0.0, 0.0, false, 0, true};
+SHT31Data shtData1 = {0, 0, false, false, 0};
+SHT31Data shtData2 = {0, 0, false, false, 0};
+
+// SGP41 conditioning times
+uint16_t sgpConditioningTime1 = 10;
+uint16_t sgpConditioningTime2 = 10;
+
+// SHT31 heater control
+unsigned long lastHeaterToggle1 = 0;
+unsigned long lastHeaterToggle2 = 0;
+bool shtHeaterEnabled1 = false;
+bool shtHeaterEnabled2 = false;
+const unsigned long HEATER_INTERVAL = 30000;
+
+// Function declarations
+String getCO2Quality(uint16_t co2);
+String getCO2Recommendation(uint16_t co2);
+String getHCHOQuality(float hcho_ppb);
+String getVOCQuality(float vocIndex);
+String getNOxQuality(float noxIndex);
+String getTemperatureQuality(float temp);
+String getHumidityQuality(float humidity);
+void printSensorStatus();
+void printPMSData(const PMSData& data, int sensorNum);
+void printSDPData(const SDP810::Data& data);
+void printSCDData(const SCD40Data& data);
+void printSFAData(const SFA30Data& data, int sensorNum);
+void printSGPData(const SGP41Data& data, int sensorNum);
+void printSHTData(const SHT31Data& data, int sensorNum);
+bool initSCD40();
+bool initSFA30(SensirionI2cSfa3x& sensor, TwoWire& wireBus, int sensorNum);
+bool initSGP41(SensirionI2CSgp41& sensor, TwoWire& wireBus, int sensorNum);
+bool initSHT31(Adafruit_SHT31& sensor, uint8_t address, int sensorNum);
+void readSCD40();
+void readSFA30(SensirionI2cSfa3x& sensor, TwoWire& wireBus, SFA30Data& data, bool& active, int sensorNum);
+void readSGP41(SensirionI2CSgp41& sensor, SGP41Data& data, bool& active, int sensorNum, uint16_t& conditioningTime, float temp, float humidity);
+void readSHT31(Adafruit_SHT31& sensor, SHT31Data& data, bool& active, int sensorNum);
+void manageSHT31Heater(Adafruit_SHT31& sensor, SHT31Data& data, unsigned long& lastHeaterToggle, bool& heaterEnabled);
+float calculateVOCIndex(uint16_t rawVoc, float vocBaseline = 100.0);
+float calculateNOxIndex(uint16_t rawNox, float noxBaseline = 100.0);
+float calculateDewPoint(float temp, float humidity);
+float calculateHeatIndex(float temp, float humidity);
+float calculateAbsoluteHumidity(float temp, float humidity);
+void readPMS5003(PMS5003& sensor, PMSData& data, bool& active, int sensorNum);
 
 // Convert temperature to ticks (SGP41 format)
 uint16_t convertTemperature(float temperature) {
-  // Formula: (temperature + 45) * 65535 / 175
-  int32_t ticks = (int32_t)((temperature + 45) * 65535.0 / 175.0);
-  if (ticks > 65535) ticks = 65535;
-  if (ticks < 0) ticks = 0;
-  return (uint16_t)ticks;
+    // Formula: (temperature + 45) * 65535 / 175
+    int32_t ticks = (int32_t)((temperature + 45) * 65535.0 / 175.0);
+    if (ticks > 65535) ticks = 65535;
+    if (ticks < 0) ticks = 0;
+    return (uint16_t)ticks;
 }
 
 // Convert humidity to ticks (SGP41 format)
 uint16_t convertHumidity(float humidity) {
-  // Formula: humidity * 65535 / 100
-  int32_t ticks = (int32_t)(humidity * 65535.0 / 100.0);
-  if (ticks > 65535) ticks = 65535;
-  if (ticks < 0) ticks = 0;
-  return (uint16_t)ticks;
+    // Formula: humidity * 65535 / 100
+    int32_t ticks = (int32_t)(humidity * 65535.0 / 100.0);
+    if (ticks > 65535) ticks = 65535;
+    if (ticks < 0) ticks = 0;
+    return (uint16_t)ticks;
 }
 
-// Calculate CRC8 for SGP41
-uint8_t calculateCRC8(const uint8_t* data, uint8_t len) {
-  uint8_t crc = 0xFF;
-  for (uint8_t i = 0; i < len; i++) {
-    crc ^= data[i];
-    for (uint8_t bit = 0; bit < 8; bit++) {
-      if (crc & 0x80) {
-        crc = (crc << 1) ^ 0x31;
-      } else {
-        crc <<= 1;
-      }
-    }
-  }
-  return crc;
+// Utility functions
+String getCO2Quality(uint16_t co2) {
+    if (co2 < 450) return "Outdoor Fresh";
+    else if (co2 < 800) return "Excellent";
+    else if (co2 < 1000) return "Good";
+    else if (co2 < 1200) return "Moderate";
+    else if (co2 < 1500) return "Poor";
+    else return "Unhealthy";
 }
 
-// Helper function to send command and read response
-uint8_t sgp41_command(TwoWire& wire, uint16_t command, uint16_t delay_ms = 0, uint16_t* data = nullptr, uint8_t data_length = 0) {
-  uint8_t buffer[2];
-  buffer[0] = command >> 8;
-  buffer[1] = command & 0xFF;
-  
-  wire.beginTransmission(SGP41_I2C_ADDRESS);
-  wire.write(buffer, 2);
-  uint8_t error = wire.endTransmission();
-  
-  if (error || delay_ms == 0) {
-    return error;
-  }
-  
-  delay(delay_ms);
-  
-  if (data && data_length > 0) {
-    uint8_t bytes_to_read = data_length * 3; // Each uint16_t + CRC
-    wire.requestFrom(SGP41_I2C_ADDRESS, bytes_to_read);
+String getCO2Recommendation(uint16_t co2) {
+    if (co2 < 800) return "Maintain ventilation";
+    else if (co2 < 1000) return "Increase ventilation";
+    else if (co2 < 1200) return "Open windows";
+    else return "VENTILATE NOW";
+}
+
+String getHCHOQuality(float hcho_ppb) {
+    float hcho_ppm = hcho_ppb / 1000.0;
+    if (hcho_ppm < 0.08) return "Good";
+    else if (hcho_ppm < 0.1) return "Moderate";
+    else if (hcho_ppm < 0.2) return "Poor";
+    else return "Hazardous";
+}
+
+String getVOCQuality(float vocIndex) {
+    if (vocIndex < 100) return "Excellent";
+    else if (vocIndex < 200) return "Good";
+    else if (vocIndex < 300) return "Moderate";
+    else if (vocIndex < 400) return "Poor";
+    else return "Unhealthy";
+}
+
+String getNOxQuality(float noxIndex) {
+    if (noxIndex < 1.5) return "Excellent";
+    else if (noxIndex < 2.5) return "Good";
+    else if (noxIndex < 3.5) return "Moderate";
+    else return "Poor";
+}
+
+String getTemperatureQuality(float temp) {
+    if (temp >= 20.0 && temp <= 24.0) return "Comfortable";
+    else if (temp >= 18.0 && temp <= 26.0) return "Acceptable";
+    else if (temp < 18.0) return "Too Cold";
+    else return "Too Warm";
+}
+
+String getHumidityQuality(float humidity) {
+    if (humidity >= 40.0 && humidity <= 60.0) return "Ideal";
+    else if (humidity >= 30.0 && humidity <= 70.0) return "Acceptable";
+    else if (humidity < 30.0) return "Too Dry";
+    else return "Too Humid";
+}
+
+float calculateVOCIndex(uint16_t rawVoc, float vocBaseline) {
+    // Simple conversion - for better accuracy, use Sensirion's algorithm
+    if (rawVoc > 65000) return 500.0;
+    return (rawVoc / 650.0) * 100.0;
+}
+
+float calculateNOxIndex(uint16_t rawNox, float noxBaseline) {
+    // Simple conversion - for better accuracy, use Sensirion's algorithm
+    if (rawNox > 65000) return 5.0;
+    return 1.0 + (rawNox / 13000.0) * 4.0;
+}
+
+float calculateDewPoint(float temp, float humidity) {
+    if (humidity > 100) humidity = 100;
+    if (humidity < 0) humidity = 0;
     
-    uint8_t j = 0;
-    while (wire.available() && j < data_length) {
-      uint8_t msb = wire.read();
-      uint8_t lsb = wire.read();
-      uint8_t crc = wire.read();
-      
-      // Verify CRC
-      uint8_t crc_data[2] = {msb, lsb};
-      if (calculateCRC8(crc_data, 2) == crc) {
-        data[j] = (msb << 8) | lsb;
-      } else {
-        data[j] = 0xFFFF; // CRC error indicator
-      }
-      j++;
-    }
-  }
-  
-  return 0;
+    float a = 17.27;
+    float b = 237.7;
+    
+    float alpha = ((a * temp) / (b + temp)) + log(humidity / 100.0);
+    return (b * alpha) / (a - alpha);
 }
 
-void setupSensor(TwoWire& wireBus, SensorData& data, const char* sensorName) {
-  Serial.print("Initializing ");
-  Serial.println(sensorName);
-  
-  delay(50);
-  
-  // Get serial number
-  if (sgp41_command(wireBus, 0x3682, 1, data.serialNumber, 3) == 0) {
-    data.initialized = true;
-    Serial.print(sensorName);
-    Serial.print(" SerialNumber: 0x");
-    for (size_t i = 0; i < 3; i++) {
-      uint16_t value = data.serialNumber[i];
-      Serial.print(value < 4096 ? "0" : "");
-      Serial.print(value < 256 ? "0" : "");
-      Serial.print(value < 16 ? "0" : "");
-      Serial.print(value, HEX);
-    }
+float calculateHeatIndex(float temp, float humidity) {
+    if (temp < 27.0) return temp;
+    
+    float c1 = -8.78469475556;
+    float c2 = 1.61139411;
+    float c3 = 2.33854883889;
+    float c4 = -0.14611605;
+    float c5 = -0.012308094;
+    float c6 = -0.0164248277778;
+    float c7 = 0.002211732;
+    float c8 = 0.00072546;
+    float c9 = -0.000003582;
+    
+    return c1 + c2*temp + c3*humidity + c4*temp*humidity +
+           c5*temp*temp + c6*humidity*humidity + c7*temp*temp*humidity +
+           c8*temp*humidity*humidity + c9*temp*temp*humidity*humidity;
+}
+
+float calculateAbsoluteHumidity(float temp, float humidity) {
+    float saturationVaporPressure = 6.112 * exp((17.67 * temp) / (temp + 243.5));
+    float vaporPressure = (humidity / 100.0) * saturationVaporPressure;
+    return (216.7 * vaporPressure) / (temp + 273.15);
+}
+
+void printSensorStatus() {
+    Serial.println("\n════════════════════════════════════════");
+    Serial.println("          SENSOR STATUS");
+    Serial.println("════════════════════════════════════════");
+    Serial.printf("  PMS5003 #1: %s\n", pmsActive1 ? "✓ ACTIVE" : "✗ INACTIVE");
+    Serial.printf("  PMS5003 #2: %s\n", pmsActive2 ? "✓ ACTIVE" : "✗ INACTIVE");
+    Serial.printf("  SDP810:     %s\n", sdpActive ? "✓ ACTIVE" : "✗ INACTIVE");
+    Serial.printf("  SCD40:      %s (%d errors)\n", scdActive ? "✓ ACTIVE" : "✗ INACTIVE", scdData.errorCount);
+    Serial.printf("  SFA30 #1:   %s (%d errors)\n", sfaActive1 ? "✓ ACTIVE" : "✗ INACTIVE", sfaData1.errorCount);
+    Serial.printf("  SFA30 #2:   %s (%d errors)\n", sfaActive2 ? "✓ ACTIVE" : "✗ INACTIVE", sfaData2.errorCount);
+    Serial.printf("  SGP41 #1:   %s (%d errors)", sgpActive1 ? "✓ ACTIVE" : "✗ INACTIVE", sgpData1.errorCount);
+    if (sgpData1.conditioning) Serial.print(" [CONDITIONING]");
     Serial.println();
-    
-    // Self-test
-    uint16_t testResult[1];
-    if (sgp41_command(wireBus, 0x280E, 320, testResult, 1) == 0) {
-      if (testResult[0] == 0xD400) {
-        Serial.print(sensorName);
-        Serial.println(" self-test passed!");
-      } else {
-        Serial.print(sensorName);
-        Serial.print(" self-test failed: 0x");
-        Serial.println(testResult[0], HEX);
-      }
-    } else {
-      Serial.print(sensorName);
-      Serial.println(" self-test error");
+    Serial.printf("  SGP41 #2:   %s (%d errors)", sgpActive2 ? "✓ ACTIVE" : "✗ INACTIVE", sgpData2.errorCount);
+    if (sgpData2.conditioning) Serial.print(" [CONDITIONING]");
+    Serial.println();
+    Serial.printf("  SHT31 #1:   %s (%d errors)", shtActive1 ? "✓ ACTIVE" : "✗ INACTIVE", shtData1.errorCount);
+    if (shtData1.heaterEnabled) Serial.print(" [HEATER ON]");
+    Serial.println();
+    Serial.printf("  SHT31 #2:   %s (%d errors)", shtActive2 ? "✓ ACTIVE" : "✗ INACTIVE", shtData2.errorCount);
+    if (shtData2.heaterEnabled) Serial.print(" [HEATER ON]");
+    Serial.println();
+    Serial.println("════════════════════════════════════════\n");
+}
+
+void printPMSData(const PMSData& data, int sensorNum) {
+    if (!data.valid) {
+        Serial.printf("[PMS5003 #%d] No valid data\n", sensorNum);
+        return;
     }
-  } else {
-    data.initialized = false;
-    data.errorMessage = "Communication error";
-    Serial.print("Error initializing ");
-    Serial.println(sensorName);
-  }
-  
-  Serial.println();
+    
+    Serial.printf("┌────────────── PM SENSOR #%d ──────────────┐\n", sensorNum);
+    Serial.printf("│ PM1.0:  %3d μg/m³                     │\n", data.pm10_standard);
+    Serial.printf("│ PM2.5:  %3d μg/m³                     │\n", data.pm25_standard);
+    Serial.printf("│ PM10:   %3d μg/m³                     │\n", data.pm100_standard);
+    Serial.println("└──────────────────────────────────────┘");
+}
+
+void printSDPData(const SDP810::Data& data) {
+    Serial.println("┌────────────── AIR FLOW ───────────────┐");
+    Serial.printf("│ Pressure: %+7.2f Pa                 │\n", data.differential_pressure);
+    Serial.printf("│ Temp:     %7.2f °C                 │\n", data.temperature);
+    Serial.printf("│ Flow:     %7.4f m³/s              │\n", data.air_flow);
+    Serial.printf("│ Velocity: %7.2f m/s                │\n", data.air_velocity);
+    
+    Serial.println("├──────────── Interpretation ───────────┤");
+    if (abs(data.differential_pressure) < 1.0) {
+        Serial.println("│ Status:   No significant air flow    │");
+    } else if (data.differential_pressure > 0) {
+        Serial.printf("│ Direction: Forward (+)%16s│\n", "");
+    } else {
+        Serial.printf("│ Direction: Reverse (-)%16s│\n", "");
+    }
+    Serial.println("└──────────────────────────────────────┘");
+}
+
+void printSCDData(const SCD40Data& data) {
+    if (!data.valid) {
+        Serial.println("[SCD40] No valid data yet");
+        return;
+    }
+    
+    String quality = getCO2Quality(data.co2);
+    String recommendation = getCO2Recommendation(data.co2);
+    
+    Serial.println("┌────────────── CO₂ SENSOR ──────────────┐");
+    Serial.printf("│ CO₂:         %5d ppm               │\n", data.co2);
+    Serial.printf("│ Temperature:   %5.1f °C              │\n", data.temperature);
+    Serial.printf("│ Humidity:      %5.1f %%               │\n", data.humidity);
+    Serial.println("├──────────────────────────────────────┤");
+    Serial.printf("│ Quality:       %-22s│\n", quality.c_str());
+    Serial.printf("│ Recommendation:%-22s│\n", recommendation.c_str());
+    Serial.println("└──────────────────────────────────────┘");
+}
+
+void printSFAData(const SFA30Data& data, int sensorNum) {
+    if (!data.valid) {
+        Serial.printf("[SFA30 #%d] No valid data\n", sensorNum);
+        return;
+    }
+    
+    String quality = getHCHOQuality(data.formaldehyde);
+    float hcho_ppm = data.formaldehyde / 1000.0;
+    
+    Serial.printf("┌──────────── FORMALDEHYDE #%d ─────────────┐\n", sensorNum);
+    Serial.printf("│ HCHO:    %6.1f ppb (%6.3f ppm)     │\n", data.formaldehyde, hcho_ppm);
+    Serial.printf("│ RH:      %6.1f %%                   │\n", data.humidity);
+    Serial.printf("│ Temp:    %6.1f °C                  │\n", data.temperature);
+    Serial.println("├──────────────────────────────────────┤");
+    Serial.printf("│ Quality: %-28s│\n", quality.c_str());
+    Serial.println("└──────────────────────────────────────┘");
+}
+
+void printSGPData(const SGP41Data& data, int sensorNum) {
+    if (!data.valid) {
+        if (data.conditioning) {
+            Serial.printf("[SGP41 #%d] Conditioning\n", sensorNum);
+        } else {
+            Serial.printf("[SGP41 #%d] No valid data\n", sensorNum);
+        }
+        return;
+    }
+    
+    String vocQuality = getVOCQuality(data.vocIndex);
+    String noxQuality = getNOxQuality(data.noxIndex);
+    
+    Serial.printf("┌───────────── VOC/NOx SENSOR #%d ───────────┐\n", sensorNum);
+    Serial.printf("│ VOC Raw:     %5d                   │\n", data.voc);
+    Serial.printf("│ VOC Index:   %5.1f (%s)     │\n", data.vocIndex, vocQuality.c_str());
+    Serial.printf("│ NOx Raw:     %5d                   │\n", data.nox);
+    Serial.printf("│ NOx Index:   %5.1f (%s)     │\n", data.noxIndex, noxQuality.c_str());
+    Serial.println("└──────────────────────────────────────┘");
+}
+
+void printSHTData(const SHT31Data& data, int sensorNum) {
+    if (!data.valid) {
+        Serial.printf("[SHT31 #%d] No valid data\n", sensorNum);
+        return;
+    }
+    
+    float dewPoint = calculateDewPoint(data.temperature, data.humidity);
+    float heatIndex = calculateHeatIndex(data.temperature, data.humidity);
+    float absHumidity = calculateAbsoluteHumidity(data.temperature, data.humidity);
+    
+    String tempQuality = getTemperatureQuality(data.temperature);
+    String humQuality = getHumidityQuality(data.humidity);
+    
+    Serial.printf("┌─────────────── SHT31 SENSOR #%d ──────────────┐\n", sensorNum);
+    Serial.printf("│ Temperature: %6.1f °C (%s)    │\n", data.temperature, tempQuality.c_str());
+    Serial.printf("│ Humidity:    %6.1f %% (%s)      │\n", data.humidity, humQuality.c_str());
+    Serial.println("├──────────────────────────────────────┤");
+    Serial.printf("│ Dew Point:   %6.1f °C                  │\n", dewPoint);
+    Serial.printf("│ Heat Index:  %6.1f °C                  │\n", heatIndex);
+    Serial.printf("│ Abs Humidity:%6.2f g/m³               │\n", absHumidity);
+    Serial.printf("│ Heater:      %-28s│\n", data.heaterEnabled ? "ON" : "OFF");
+    Serial.println("└──────────────────────────────────────┘");
+}
+
+bool initSCD40() {
+    Serial.println("[SCD40] Initializing...");
+    
+    scd40.begin(I2C_MAIN, SCD40_I2C_ADDRESS);
+    delay(50);
+    
+    int16_t error = scd40.stopPeriodicMeasurement();
+    delay(500);
+    
+    uint64_t serial = 0;
+    error = scd40.getSerialNumber(serial);
+    if (error == NO_ERROR) {
+        Serial.print("  ✓ Detected! Serial: 0x");
+        Serial.print((uint32_t)(serial >> 32), HEX);
+        Serial.println((uint32_t)(serial & 0xFFFFFFFF), HEX);
+        
+        scd40.setAutomaticSelfCalibrationEnabled(true);
+        error = scd40.startPeriodicMeasurement();
+        if (error == NO_ERROR) {
+            Serial.println("  ✓ Measurement started");
+            return true;
+        }
+    }
+    Serial.println("  ✗ Not detected!");
+    return false;
+}
+
+bool initSFA30(SensirionI2cSfa3x& sensor, TwoWire& wireBus, int sensorNum) {
+    Serial.printf("[SFA30 #%d] Initializing...\n", sensorNum);
+    
+    // Add small delay before initialization
+    delay(100);
+    
+    // Initialize the sensor with the specific bus
+    sensor.begin(wireBus, SFA30_I2C_ADDRESS);
+    
+    // Check if bus is initialized
+    Serial.printf("  Bus check... ");
+    wireBus.beginTransmission(0x00); // Try a dummy transmission
+    uint8_t busError = wireBus.endTransmission();
+    if (busError != 0) {
+        Serial.printf("Bus error: %d\n", busError);
+        return false;
+    }
+    Serial.println("OK");
+    
+    delay(50);
+    
+    int8_t deviceMarking[32] = {0};
+    int16_t error = sensor.getDeviceMarking(deviceMarking, 32);
+    
+    if (error == NO_ERROR) {
+        Serial.printf("  ✓ Detected! Device: %s\n", (const char*)deviceMarking);
+        
+        error = sensor.startContinuousMeasurement();
+        if (error == NO_ERROR) {
+            Serial.println("  ✓ Measurement started");
+            return true;
+        } else {
+            Serial.printf("  ✗ Start measurement error: %d\n", error);
+        }
+    } else {
+        Serial.printf("  ✗ Not detected (error: %d)\n", error);
+    }
+    return false;
+}
+
+bool initSGP41(SensirionI2CSgp41& sensor, TwoWire& wireBus, int sensorNum) {
+    Serial.printf("[SGP41 #%d] Initializing...\n", sensorNum);
+    
+    sensor.begin(wireBus);
+    delay(50);
+    
+    uint8_t serialNumberSize = 3;
+    uint16_t serialNumber[serialNumberSize];
+    int16_t error = sensor.getSerialNumber(serialNumber);
+    
+    if (error == NO_ERROR) {
+        Serial.printf("  ✓ Detected! Serial #%d: 0x", sensorNum);
+        for (size_t i = 0; i < serialNumberSize; i++) {
+            Serial.print(serialNumber[i] < 4096 ? "0" : "");
+            Serial.print(serialNumber[i] < 256 ? "0" : "");
+            Serial.print(serialNumber[i] < 16 ? "0" : "");
+            Serial.print(serialNumber[i], HEX);
+        }
+        Serial.println();
+        
+        uint16_t testResult;
+        error = sensor.executeSelfTest(testResult);
+        if (error == NO_ERROR && testResult == 0xD400) {
+            Serial.println("  ✓ Self-test passed");
+        }
+        return true;
+    }
+    Serial.printf("  ✗ Not detected for sensor #%d!\n", sensorNum);
+    return false;
+}
+
+bool initSHT31(Adafruit_SHT31& sensor, uint8_t address, int sensorNum) {
+    Serial.printf("[SHT31 #%d] Initializing at address 0x%02X...\n", sensorNum, address);
+    
+    if (sensor.begin(address)) {
+        Serial.printf("  ✓ Detected at address 0x%02X\n", address);
+        
+        // Disable heater initially
+        sensor.heater(false);
+        Serial.println("  Heater: DISABLED (initial)");
+        
+        return true;
+    }
+    
+    Serial.printf("  ✗ Not detected at address 0x%02X!\n", address);
+    return false;
+}
+
+void readPMS5003(PMS5003& sensor, PMSData& data, bool& active, int sensorNum) {
+    if (!active) return;
+    
+    static unsigned long lastRead1 = 0;
+    static unsigned long lastRead2 = 0;
+    unsigned long* lastRead = (sensorNum == 1) ? &lastRead1 : &lastRead2;
+    unsigned long now = millis();
+    
+    if (now - *lastRead < 2000) return;
+    *lastRead = now;
+    
+    PMS5003::Data rawData;
+    if (sensor.readData(rawData)) {
+        data.pm10_standard = rawData.pm10_standard;
+        data.pm25_standard = rawData.pm25_standard;
+        data.pm100_standard = rawData.pm100_standard;
+        data.valid = true;
+        data.errorCount = 0;
+    } else {
+        data.valid = false;
+        data.errorCount++;
+        if (data.errorCount >= MAX_ERRORS) {
+            active = false;
+            Serial.printf("[PMS5003 #%d] Too many errors, disabling\n", sensorNum);
+        }
+    }
+}
+
+void readSCD40() {
+    if (!scdActive) return;
+    
+    static unsigned long lastCheck = 0;
+    unsigned long now = millis();
+    
+    if (now - lastCheck < 2000) return;
+    lastCheck = now;
+    
+    bool dataReady = false;
+    int16_t error = scd40.getDataReadyStatus(dataReady);
+    
+    if (error != NO_ERROR) {
+        scdData.errorCount++;
+        if (scdData.errorCount >= MAX_ERRORS) scdActive = false;
+        return;
+    }
+    
+    scdData.dataReady = dataReady;
+    
+    if (dataReady) {
+        uint16_t co2 = 0;
+        float temp = 0, hum = 0;
+        
+        error = scd40.readMeasurement(co2, temp, hum);
+        
+        if (error == NO_ERROR) {
+            scdData.co2 = co2;
+            scdData.temperature = temp;
+            scdData.humidity = hum;
+            scdData.valid = true;
+            scdData.errorCount = 0;
+            scdData.lastRead = now;
+        } else {
+            scdData.valid = false;
+            scdData.errorCount++;
+            if (scdData.errorCount >= MAX_ERRORS) scdActive = false;
+        }
+    }
+}
+
+void readSFA30(SensirionI2cSfa3x& sensor, TwoWire& wireBus, SFA30Data& data, bool& active, int sensorNum) {
+    if (!active) return;
+    
+    static unsigned long lastRead1 = 0;
+    static unsigned long lastRead2 = 0;
+    unsigned long* lastRead = (sensorNum == 1) ? &lastRead1 : &lastRead2;
+    unsigned long now = millis();
+    
+    if (now - *lastRead < 2000) return;
+    *lastRead = now;
+    
+    float hcho = 0, humidity = 0, temperature = 0;
+    
+    // Ensure we're using the correct bus for this sensor
+    sensor.begin(wireBus, SFA30_I2C_ADDRESS);
+    
+    int16_t error = sensor.readMeasuredValues(hcho, humidity, temperature);
+    
+    if (error == NO_ERROR) {
+        data.formaldehyde = hcho;
+        data.humidity = humidity;
+        data.temperature = temperature;
+        data.valid = true;
+        data.errorCount = 0;
+    } else {
+        data.valid = false;
+        data.errorCount++;
+        if (data.errorCount >= MAX_ERRORS) {
+            active = false;
+            Serial.printf("[SFA30 #%d] Too many errors, disabling\n", sensorNum);
+        }
+    }
+}
+
+void readSGP41(SensirionI2CSgp41& sensor, SGP41Data& data, bool& active, int sensorNum, uint16_t& conditioningTime, float temp, float humidity) {
+    if (!active) return;
+    
+    static unsigned long lastRead1 = 0;
+    static unsigned long lastRead2 = 0;
+    unsigned long* lastRead = (sensorNum == 1) ? &lastRead1 : &lastRead2;
+    unsigned long now = millis();
+    
+    if (now - *lastRead < 2000) return;
+    *lastRead = now;
+    
+    uint16_t rh_ticks = convertHumidity(humidity);
+    uint16_t t_ticks = convertTemperature(temp);
+    uint16_t srawVoc = 0;
+    uint16_t srawNox = 0;
+    
+    int16_t error;
+    
+    if (data.conditioning && conditioningTime > 0) {
+        error = sensor.executeConditioning(rh_ticks, t_ticks, srawVoc);
+        conditioningTime--;
+        
+        if (conditioningTime == 0) {
+            data.conditioning = false;
+            Serial.printf("[SGP41 #%d] NOx conditioning complete!\n", sensorNum);
+        }
+    } else {
+        error = sensor.measureRawSignals(rh_ticks, t_ticks, srawVoc, srawNox);
+    }
+    
+    if (error == NO_ERROR) {
+        data.voc = srawVoc;
+        data.nox = srawNox;
+        data.vocIndex = calculateVOCIndex(srawVoc);
+        data.noxIndex = calculateNOxIndex(srawNox);
+        data.valid = true;
+        data.errorCount = 0;
+    } else {
+        data.valid = false;
+        data.errorCount++;
+        if (data.errorCount >= MAX_ERRORS) {
+            active = false;
+            Serial.printf("[SGP41 #%d] Too many errors, disabling\n", sensorNum);
+        }
+    }
+}
+
+void readSHT31(Adafruit_SHT31& sensor, SHT31Data& data, bool& active, int sensorNum) {
+    if (!active) return;
+    
+    static unsigned long lastRead1 = 0;
+    static unsigned long lastRead2 = 0;
+    unsigned long* lastRead = (sensorNum == 1) ? &lastRead1 : &lastRead2;
+    unsigned long now = millis();
+    
+    if (now - *lastRead < 2000) return;
+    *lastRead = now;
+    
+    float temperature = sensor.readTemperature();
+    float humidity = sensor.readHumidity();
+    
+    if (!isnan(temperature) && !isnan(humidity)) {
+        data.temperature = temperature;
+        data.humidity = humidity;
+        data.heaterEnabled = sensor.isHeaterEnabled();
+        data.valid = true;
+        data.errorCount = 0;
+    } else {
+        data.valid = false;
+        data.errorCount++;
+        
+        if (data.errorCount >= MAX_ERRORS) {
+            active = false;
+            Serial.printf("[SHT31 #%d] Too many errors, disabling\n", sensorNum);
+        }
+    }
+}
+
+void manageSHT31Heater(Adafruit_SHT31& sensor, SHT31Data& data, unsigned long& lastHeaterToggle, bool& heaterEnabled) {
+    unsigned long now = millis();
+    
+    if (now - lastHeaterToggle >= HEATER_INTERVAL) {
+        lastHeaterToggle = now;
+        heaterEnabled = !heaterEnabled;
+        sensor.heater(heaterEnabled);
+        data.heaterEnabled = heaterEnabled;
+    }
 }
 
 void setup() {
-  Serial.begin(115200);
-  while (!Serial) {
+    Serial.begin(115200);
+    delay(2000);
+    
+    Serial.println("\n╔══════════════════════════════════════╗");
+    Serial.println("║  12-SENSOR AIR QUALITY MONITOR      ║");
+    Serial.println("║  MULTI-I2C BUS SOLUTION             ║");
+    Serial.println("╚══════════════════════════════════════╝\n");
+    
+    // ==================== INITIALIZE ALL I2C BUSES ====================
+    Serial.println("[I2C] Initializing multiple I2C buses...");
+    
+    // 1. MAIN I2C BUS (SHT31 x2, SCD40, SDP810, SGP41 #1, SFA30 #1)
+    Serial.println("  1. Main Bus (Wire0): Pins 21(SDA), 22(SCL)");
+    Serial.println("     → SHT31 #1 (0x44), SHT31 #2 (0x45)");
+    Serial.println("     → SCD40 (0x62), SDP810 (0x25)");
+    Serial.println("     → SGP41 #1 (0x59), SFA30 #1 (0x5D)");
+    I2C_MAIN.begin(MAIN_I2C_SDA, MAIN_I2C_SCL, 100000);
+    
+    // 2. SGP41 #2 BUS
+    Serial.println("  2. SGP41 #2 Bus (Wire1): Pins 32(SDA), 33(SCL)");
+    Serial.println("     → SGP41 #2 (0x59)");
+    I2C_SGP41_2.begin(SGP41_2_SDA, SGP41_2_SCL, 100000);
+    
+    // 3. SFA30 #2 BUS
+    Serial.println("  3. SFA30 #2 Bus (Wire2): Pins 25(SDA), 26(SCL)");
+    Serial.println("     → SFA30 #2 (0x5D)");
+    I2C_SFA30_2.begin(SFA30_2_SDA, SFA30_2_SCL, 100000);
+    
     delay(100);
-  }
-  
-  Serial.println("Dual SGP41 Sensor Test with Compensation");
-  Serial.println("=========================================");
-  
-  // Initialize first I2C bus on pins 21 (SDA), 22 (SCL)
-  I2C_SGP41_1.begin(21, 22, 100000);
-  
-  // Initialize second I2C bus on pins 32 (SDA), 33 (SCL)
-  I2C_SGP41_2.begin(32, 33, 100000);
-  
-  delay(100);
-  
-  // Initialize sensors
-  setupSensor(I2C_SGP41_1, sensor1, "SGP41 #1 (pins 21,22)");
-  setupSensor(I2C_SGP41_2, sensor2, "SGP41 #2 (pins 32,33)");
-  
-  Serial.println("Initialization complete. Starting measurements...");
-  Serial.println("Note: Sensors need 10-48 hours burn-in for accurate readings.");
-  Serial.println();
-  
-  delay(1000);
-}
-
-void readSensor(TwoWire& wire, SensorData& data, const char* sensorName) {
-  if (!data.initialized) {
-    return;
-  }
-  
-  uint16_t rh_ticks = convertHumidity(humidity);
-  uint16_t t_ticks = convertTemperature(temperature);
-  uint16_t response[2];
-  
-  // Prepare data for transmission with CRC
-  uint8_t buffer[8];
-  
-  if (conditioning_s > 0) {
-    // Execute conditioning command: 0x2612
-    buffer[0] = 0x26;  // Command high byte
-    buffer[1] = 0x12;  // Command low byte
-    buffer[2] = rh_ticks >> 8;
-    buffer[3] = rh_ticks & 0xFF;
-    buffer[4] = calculateCRC8(&buffer[2], 2);  // CRC for RH
-    buffer[5] = t_ticks >> 8;
-    buffer[6] = t_ticks & 0xFF;
-    buffer[7] = calculateCRC8(&buffer[5], 2);  // CRC for T
     
-    wire.beginTransmission(SGP41_I2C_ADDRESS);
-    wire.write(buffer, 8);
-    
-    if (wire.endTransmission() == 0) {
-      delay(50);
-      wire.requestFrom(SGP41_I2C_ADDRESS, 3);
-      if (wire.available() >= 3) {
-        uint8_t msb = wire.read();
-        uint8_t lsb = wire.read();
-        uint8_t crc = wire.read();
-        
-        uint8_t crc_data[2] = {msb, lsb};
-        if (calculateCRC8(crc_data, 2) == crc) {
-          data.srawVoc = (msb << 8) | lsb;
-          data.srawNox = 0;  // NOx is 0 during conditioning
-          data.errorMessage = "";
-        }
-      }
-    }
-  } else {
-    // Measure raw signals command: 0x261F
-    buffer[0] = 0x26;  // Command high byte
-    buffer[1] = 0x1F;  // Command low byte
-    buffer[2] = rh_ticks >> 8;
-    buffer[3] = rh_ticks & 0xFF;
-    buffer[4] = calculateCRC8(&buffer[2], 2);  // CRC for RH
-    buffer[5] = t_ticks >> 8;
-    buffer[6] = t_ticks & 0xFF;
-    buffer[7] = calculateCRC8(&buffer[5], 2);  // CRC for T
-    
-    wire.beginTransmission(SGP41_I2C_ADDRESS);
-    wire.write(buffer, 8);
-    
-    if (wire.endTransmission() == 0) {
-      delay(50);
-      wire.requestFrom(SGP41_I2C_ADDRESS, 6);
-      if (wire.available() >= 6) {
-        // Read VOC
-        uint8_t msb_voc = wire.read();
-        uint8_t lsb_voc = wire.read();
-        uint8_t crc_voc = wire.read();
-        
-        // Read NOx
-        uint8_t msb_nox = wire.read();
-        uint8_t lsb_nox = wire.read();
-        uint8_t crc_nox = wire.read();
-        
-        uint8_t crc_voc_data[2] = {msb_voc, lsb_voc};
-        uint8_t crc_nox_data[2] = {msb_nox, lsb_nox};
-        
-        if (calculateCRC8(crc_voc_data, 2) == crc_voc && 
-            calculateCRC8(crc_nox_data, 2) == crc_nox) {
-          data.srawVoc = (msb_voc << 8) | lsb_voc;
-          data.srawNox = (msb_nox << 8) | lsb_nox;
-          data.errorMessage = "";
-          
-          // Calculate TVOC and NOx indices (simplified)
-          // These are just indicative values - for accurate conversion,
-          // you need Sensirion's algorithm library
-          data.tvoc_index = data.srawVoc / 100.0;
-          data.nox_index = data.srawNox / 100.0;
-        }
-      }
-    }
-  }
-}
-
-void printSensorData(const SensorData& data, const char* sensorName) {
-  Serial.print(sensorName);
-  Serial.print(": ");
-  
-  if (!data.initialized) {
-    Serial.println("Not initialized");
-    return;
-  }
-  
-  if (data.errorMessage.length() > 0) {
-    Serial.print("Error - ");
-    Serial.print(data.errorMessage);
-  } else {
-    Serial.print("RAW VOC=");
-    Serial.print(data.srawVoc);
-    Serial.print("\tRAW NOx=");
-    Serial.print(data.srawNox);
-    
-    if (conditioning_s == 0) {
-      Serial.print("\tTVOC Index=");
-      Serial.print(data.tvoc_index, 2);
-      Serial.print("\tNOx Index=");
-      Serial.print(data.nox_index, 2);
+    // ==================== PMS5003 INITIALIZATION ====================
+    Serial.println("\n[PMS5003 #1] Initializing...");
+    Serial2.begin(9600, SERIAL_8N1, PMS_RX_PIN_1, PMS_TX_PIN_1);
+    if (pmsSensor1.begin()) {
+        pmsActive1 = true;
+        Serial.println("  ✓ Sensor ready!");
     } else {
-      Serial.print(" (Conditioning)");
+        Serial.println("  ✗ Initialization failed!");
     }
-  }
-  
-  Serial.println();
-}
-
-void printInterpretation() {
-  Serial.println("\n=== Interpretation Guide ===");
-  Serial.println("Normal ranges after burn-in:");
-  Serial.println("- RAW VOC: 0-1000 (typical clean air)");
-  Serial.println("- RAW NOx: 0-1000 (typical clean air)");
-  Serial.println("- High values (>20000) indicate:");
-  Serial.println("  1. Burn-in period (10-48 hours needed)");
-  Serial.println("  2. High pollution environment");
-  Serial.println("  3. Needs temp/humidity compensation");
-  Serial.println("==================================\n");
+    
+    Serial.println("[PMS5003 #2] Initializing...");
+    Serial1.begin(9600, SERIAL_8N1, PMS_RX_PIN_2, PMS_TX_PIN_2);
+    if (pmsSensor2.begin()) {
+        pmsActive2 = true;
+        Serial.println("  ✓ Sensor ready!");
+    } else {
+        Serial.println("  ✗ Initialization failed!");
+    }
+    
+    // ==================== SDP810 INITIALIZATION ====================
+    Serial.println("\n[SDP810] Initializing on main bus...");
+    if (sdpSensor.begin()) {
+        sdpActive = true;
+        sdpSensor.startContinuousMeasurement(SDP810::CONTINUOUS_MEASUREMENT);
+        Serial.println("  ✓ Continuous measurement started");
+    } else {
+        Serial.println("  ✗ Sensor not found!");
+    }
+    
+    // ==================== SCD40 INITIALIZATION ====================
+    scdActive = initSCD40();
+    
+    // ==================== SHT31 INITIALIZATION ====================
+    Serial.println("\n[SHT31] Initializing on main bus...");
+    shtActive1 = initSHT31(sht31_1, SHT31_I2C_ADDRESS_1, 1);
+    shtActive2 = initSHT31(sht31_2, SHT31_I2C_ADDRESS_2, 2);
+    
+    // ==================== SFA30 INITIALIZATION ====================
+    Serial.println("\n[SFA30] Initializing...");
+    sfaActive1 = initSFA30(sfaSensor1, I2C_MAIN, 1);      // On main bus (21,22)
+    sfaActive2 = initSFA30(sfaSensor2, I2C_SFA30_2, 2);   // On separate bus (25,26)
+    
+    // ==================== SGP41 INITIALIZATION ====================
+    Serial.println("\n[SGP41] Initializing...");
+    sgpActive1 = initSGP41(sgp41_1, I2C_MAIN, 1);      // On main bus
+    sgpActive2 = initSGP41(sgp41_2, I2C_SGP41_2, 2);   // On separate bus
+    
+    // ==================== FINAL STATUS ====================
+    Serial.println("\n════════════════════════════════════════");
+    Serial.println("        INITIALIZATION COMPLETE");
+    Serial.println("════════════════════════════════════════");
+    printSensorStatus();
+    
+    // Display bus configuration
+    Serial.println("\n════════════════════════════════════════");
+    Serial.println("          I2C BUS CONFIGURATION");
+    Serial.println("════════════════════════════════════════");
+    Serial.println("Bus 0 (Main): Pins 21(SDA), 22(SCL)");
+    Serial.println("  → SHT31 #1 (0x44), SHT31 #2 (0x45)");
+    Serial.println("  → SCD40 (0x62), SDP810 (0x25)");
+    Serial.println("  → SGP41 #1 (0x59), SFA30 #1 (0x5D)");
+    Serial.println("");
+    Serial.println("Bus 1: Pins 32(SDA), 33(SCL)");
+    Serial.println("  → SGP41 #2 (0x59)");
+    Serial.println("");
+    Serial.println("Bus 2: Pins 25(SDA), 26(SCL)");
+    Serial.println("  → SFA30 #2 (0x5D)");
+    Serial.println("════════════════════════════════════════\n");
+    
+    Serial.println("IMPORTANT WIRING NOTES:");
+    Serial.println("1. SHT31 #1: ADDR pin → GND (address 0x44)");
+    Serial.println("2. SHT31 #2: ADDR pin → 3.3V (address 0x45)");
+    Serial.println("3. SFA30 #1: On main bus (21,22) with other sensors");
+    Serial.println("4. SFA30 #2: On separate bus (25,26)");
+    Serial.println("5. SGP41 #1: On main bus (21,22)");
+    Serial.println("6. SGP41 #2: On separate bus (32,33)");
+    Serial.println("7. All VIN → 3.3V, All GND → GND");
+    Serial.println("\nStarting measurements in 5 seconds...");
+    delay(5000);
 }
 
 void loop() {
-  // Read both sensors
-  readSensor(I2C_SGP41_1, sensor1, "Sensor 1");
-  readSensor(I2C_SGP41_2, sensor2, "Sensor 2");
-  
-  // Print sensor data
-  Serial.println("\n=== Sensor Readings ===");
-  Serial.print("Temp: ");
-  Serial.print(temperature);
-  Serial.print("°C, Humidity: ");
-  Serial.print(humidity);
-  Serial.println("%");
-  printSensorData(sensor1, "SGP41 #1 (21,22)");
-  printSensorData(sensor2, "SGP41 #2 (32,33)");
-  
-  // Update conditioning counter
-  if (conditioning_s > 0) {
-    conditioning_s--;
-    Serial.print("\nNOx conditioning: ");
-    Serial.print(conditioning_s);
-    Serial.println(" seconds remaining");
-  } else if (conditioning_s == 0) {
-    static bool first_measurement = true;
-    if (first_measurement) {
-      Serial.println("\nConditioning complete! Starting normal measurements.");
-      printInterpretation();
-      first_measurement = false;
+    static SDP810::Data sdpData;
+    static bool sdpOk = false;
+    
+    // Get temperature and humidity from SHT31 sensors for SGP41 compensation
+    float avgTemp = (shtData1.temperature + shtData2.temperature) / 2.0;
+    float avgHumidity = (shtData1.humidity + shtData2.humidity) / 2.0;
+    
+    // If SHT sensors aren't ready yet, use defaults
+    if (isnan(avgTemp) || avgTemp == 0) avgTemp = 25.0;
+    if (isnan(avgHumidity) || avgHumidity == 0) avgHumidity = 50.0;
+    
+    // ==================== READ SENSORS ====================
+    
+    // Read PMS5003 sensors
+    readPMS5003(pmsSensor1, pmsData1, pmsActive1, 1);
+    readPMS5003(pmsSensor2, pmsData2, pmsActive2, 2);
+    
+    // Read SDP810
+    if (sdpActive) {
+        sdpOk = sdpSensor.readMeasurement(sdpData);
     }
-  }
-  
-  Serial.println("======================================");
-  
-  // Add some statistics every 10 readings
-  static int reading_count = 0;
-  reading_count++;
-  
-  if (reading_count % 10 == 0 && conditioning_s == 0) {
-    Serial.println("\n=== 10-Reading Summary ===");
-    Serial.println("Both sensors are showing similar trends,");
-    Serial.println("which indicates they're functioning correctly.");
-    Serial.println("High VOC values suggest burn-in period.");
-    Serial.println("============================\n");
-  }
-  
-  delay(1000);
+    
+    // Read I2C sensors on their respective buses
+    readSCD40();
+    readSFA30(sfaSensor1, I2C_MAIN, sfaData1, sfaActive1, 1);      // Main bus
+    readSFA30(sfaSensor2, I2C_SFA30_2, sfaData2, sfaActive2, 2);   // Separate bus
+    readSGP41(sgp41_1, sgpData1, sgpActive1, 1, sgpConditioningTime1, avgTemp, avgHumidity);
+    readSGP41(sgp41_2, sgpData2, sgpActive2, 2, sgpConditioningTime2, avgTemp, avgHumidity);
+    readSHT31(sht31_1, shtData1, shtActive1, 1);
+    readSHT31(sht31_2, shtData2, shtActive2, 2);
+    
+    // Manage SHT31 heaters
+    manageSHT31Heater(sht31_1, shtData1, lastHeaterToggle1, shtHeaterEnabled1);
+    manageSHT31Heater(sht31_2, shtData2, lastHeaterToggle2, shtHeaterEnabled2);
+    
+    // ==================== DISPLAY DATA ====================
+    if (millis() - lastDisplayTime >= DISPLAY_INTERVAL) {
+        lastDisplayTime = millis();
+        
+        Serial.println("\n════════════════════════════════════════");
+        Serial.printf("        Reading #%lu\n", lastDisplayTime / DISPLAY_INTERVAL);
+        Serial.printf("  Compensation: %.1f°C, %.1f%% RH\n", avgTemp, avgHumidity);
+        Serial.println("════════════════════════════════════════\n");
+        
+        // Display PMS5003 data
+        if (pmsActive1 && pmsData1.valid) printPMSData(pmsData1, 1);
+        if (pmsActive2 && pmsData2.valid) printPMSData(pmsData2, 2);
+        
+        Serial.println();
+        
+        // Display SDP810 data
+        if (sdpOk) {
+            printSDPData(sdpData);
+            sdpOk = false;
+        } else if (sdpActive) {
+            Serial.println("[SDP810] No new data");
+        }
+        
+        Serial.println();
+        
+        // Display SCD40 data
+        printSCDData(scdData);
+        
+        Serial.println();
+        
+        // Display SFA30 data
+        if (sfaActive1 && sfaData1.valid) printSFAData(sfaData1, 1);
+        if (sfaActive2 && sfaData2.valid) printSFAData(sfaData2, 2);
+        
+        Serial.println();
+        
+        // Display SGP41 data
+        if (sgpActive1) printSGPData(sgpData1, 1);
+        if (sgpActive2) printSGPData(sgpData2, 2);
+        
+        Serial.println();
+        
+        // Display SHT31 data
+        if (shtActive1 && shtData1.valid) printSHTData(shtData1, 1);
+        if (shtActive2 && shtData2.valid) printSHTData(shtData2, 2);
+        
+        Serial.println("\n──────────────────────────────────────");
+        Serial.printf("Next update in: %.1f seconds\n", DISPLAY_INTERVAL / 1000.0);
+        
+        // Show sensor status every 5th reading
+        static int readingCount = 0;
+        readingCount++;
+        if (readingCount % 5 == 0) {
+            printSensorStatus();
+        }
+    }
+    
+    delay(100);
 }
