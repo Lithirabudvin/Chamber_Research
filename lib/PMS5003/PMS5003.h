@@ -23,6 +23,8 @@ public:
     PMS5003(HardwareSerial& serial, int rxPin = 16, int txPin = 17);
     bool begin();
     bool readData(Data& data);
+    bool readData(Data& data, uint32_t timeout_ms);  // Overloaded version
+    bool readDataNonBlocking(Data& data);  // New non-blocking version
     bool isAvailable();
     int calculateAQI(float pm25);
     String getAQICategory(int aqi);

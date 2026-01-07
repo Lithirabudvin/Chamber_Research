@@ -5,6 +5,8 @@ PMS5003::PMS5003(HardwareSerial& serial, int rxPin, int txPin)
 
 bool PMS5003::begin() {
     _serial.begin(9600, SERIAL_8N1, _rxPin, _txPin);
+    _serial.setTimeout(100);  // Add timeout for readBytes
+    _serial.setRxBufferSize(256);  // Increase buffer
     
     // Clear buffer
     while (_serial.available()) {
@@ -18,31 +20,86 @@ bool PMS5003::begin() {
     return true;
 }
 
-bool PMS5003::readData(Data& data) {
-    if (!_serial.available()) return false;
+// IMPROVED VERSION with timeout and better packet handling
+bool PMS5003::readData(Data& data, uint32_t timeout_ms) {
+    if (!_serial.available()) {
+        delay(10);
+        return false;
+    }
     
-    // Look for start bytes (0x42, 0x4D)
     uint8_t buffer[32];
     int index = 0;
+    unsigned long startTime = millis();
     
-    // Wait for start bytes
-    while (_serial.available() && index < 32) {
-        uint8_t b = _serial.read();
-        
-        if (index == 0 && b != 0x42) continue;
-        if (index == 1 && b != 0x4D) {
-            index = 0;
-            continue;
+    // Look for start bytes with timeout
+    while ((millis() - startTime) < timeout_ms && index < 32) {
+        if (_serial.available()) {
+            uint8_t b = _serial.read();
+            
+            // Look for start sequence
+            if (index == 0 && b != 0x42) continue;
+            if (index == 1 && b != 0x4D) {
+                index = 0;
+                continue;
+            }
+            
+            buffer[index++] = b;
+            
+            if (index == 32) {
+                // Full packet received
+                if (_checksumValid(buffer)) {
+                    return _parseData(buffer, data);
+                } else {
+                    index = 0; // Reset if checksum fails
+                }
+            }
+        } else {
+            delay(1); // Small delay to prevent busy waiting
         }
-        
-        buffer[index++] = b;
-        
-        if (index == 32) {
-            // Full packet received
+    }
+    
+    // If we timed out but have partial data, clear it
+    if (index > 0) {
+        // Serial.printf("[PMS] Timeout with %d bytes\n", index);
+    }
+    
+    return false;
+}
+
+// Alternative: Simple non-blocking version
+bool PMS5003::readDataNonBlocking(Data& data) {
+    if (_serial.available() < 32) return false;
+    
+    uint8_t buffer[32];
+    int bytesRead = _serial.readBytes(buffer, 32);
+    
+    if (bytesRead == 32) {
+        // Check if we have valid start bytes
+        if (buffer[0] == 0x42 && buffer[1] == 0x4D) {
             if (_checksumValid(buffer)) {
                 return _parseData(buffer, data);
             }
-            index = 0; // Reset if checksum fails
+        } else {
+            // Wrong start bytes, discard and try to sync
+            // Look for 0x42 in the buffer
+            for (int i = 1; i < 32; i++) {
+                if (buffer[i] == 0x42) {
+                    // Discard everything before this
+                    uint8_t temp[32];
+                    int remaining = 32 - i;
+                    // Move remaining bytes to temp
+                    for (int j = 0; j < remaining; j++) {
+                        temp[j] = buffer[i + j];
+                    }
+                    // Read the rest
+                    _serial.readBytes(&temp[remaining], i);
+                    // Check this new buffer
+                    if (temp[0] == 0x42 && temp[1] == 0x4D && _checksumValid(temp)) {
+                        return _parseData(temp, data);
+                    }
+                    break;
+                }
+            }
         }
     }
     
@@ -79,6 +136,8 @@ bool PMS5003::_checksumValid(uint8_t* buffer) {
     uint16_t checksum = (buffer[30] << 8) | buffer[31];
     return (sum == checksum);
 }
+
+// ... rest of your existing functions ...
 
 float PMS5003::_mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;

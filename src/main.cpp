@@ -504,37 +504,59 @@ void readSFA30_AltPins(SensirionI2cSfa3x& sensor, SFA30Data& data, bool& active,
 void readPMS5003(PMS5003& sensor, PMSData& data, bool& active, int sensorNum) {
     if (!active) return;
     
-    static unsigned long lastRead1 = 0;
-    static unsigned long lastRead2 = 0;
-    unsigned long* lastRead = (sensorNum == 1) ? &lastRead1 : &lastRead2;
+    static unsigned long lastRead[2] = {0, 0};
+    static unsigned long lastSuccess[2] = {0, 0};
     unsigned long now = millis();
     
-    if (now - *lastRead < 5000) return;  // Increased from 2000 to 5000ms
-    *lastRead = now;
-    
-    // Clear serial buffer before reading
-    if (sensorNum == 1) {
-        while (Serial2.available()) Serial2.read();
-    } else {
-        while (Serial1.available()) Serial1.read();
-    }
-    delay(10);
+    // Read every 2 seconds (PMS sends data every 1 second)
+    if (now - lastRead[sensorNum-1] < 2000) return;
+    lastRead[sensorNum-1] = now;
     
     PMS5003::Data rawData;
-    // REMOVED TIMEOUT PARAMETER - use library's default
-    if (sensor.readData(rawData)) {
+    
+    // METHOD 1: Try non-blocking first (recommended)
+    if (sensor.readDataNonBlocking(rawData)) {
         data.pm10_standard = rawData.pm10_standard;
         data.pm25_standard = rawData.pm25_standard;
         data.pm100_standard = rawData.pm100_standard;
         data.valid = true;
         data.errorCount = 0;
-    } else {
+        lastSuccess[sensorNum-1] = now;
+        
+        Serial.printf("[PMS%d] ✓ PM2.5=%d, PM10=%d\n", 
+                     sensorNum, rawData.pm25_standard, rawData.pm100_standard);
+    }
+    // METHOD 2: Try with timeout (100ms max)
+    else if (sensor.readData(rawData, 100)) {
+        data.pm10_standard = rawData.pm10_standard;
+        data.pm25_standard = rawData.pm25_standard;
+        data.pm100_standard = rawData.pm100_standard;
+        data.valid = true;
+        data.errorCount = 0;
+        lastSuccess[sensorNum-1] = now;
+        
+        Serial.printf("[PMS%d] ⏱ PM2.5=%d (timeout used)\n", 
+                     sensorNum, rawData.pm25_standard);
+    }
+    else {
         data.valid = false;
         data.errorCount++;
-        Serial.printf("[PMS5003 #%d] Read error #%d\n", sensorNum, data.errorCount);
-        if (data.errorCount >= MAX_ERRORS) {
+        
+        // If no success for 10 seconds, wake sensor
+        if (now - lastSuccess[sensorNum-1] > 10000) {
+            Serial.printf("[PMS%d] No data for 10s - waking...\n", sensorNum);
+            sensor.wakeUp();
+            delay(50);
+            lastSuccess[sensorNum-1] = now;
+            data.errorCount = 0;
+        }
+        
+        Serial.printf("[PMS%d] ✗ No data (errors: %d)\n", 
+                     sensorNum, data.errorCount);
+        
+        if (data.errorCount >= 10) {
             active = false;
-            Serial.printf("[PMS5003 #%d] Too many errors, disabling\n", sensorNum);
+            Serial.printf("[PMS%d] DISABLED\n", sensorNum);
         }
     }
 }
