@@ -18,7 +18,6 @@
 #define MAIN_SCL 22
 #define ALT_SDA 25    // For SFA30 #2
 #define ALT_SCL 26    // For SFA30 #2
-
 // I2C Addresses
 #define SDP810_I2C_ADDRESS 0x25
 #define SCD40_I2C_ADDRESS 0x62
