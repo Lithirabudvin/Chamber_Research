@@ -1,35 +1,33 @@
 #pragma once
 
 #include <Wire.h>
-#include <SensirionI2cSfa3x.h>
+#include <Adafruit_SHT31.h>
 
-namespace SFA30 {
+namespace SHT31 {
     
     struct Data {
-        float formaldehyde;  // ppb
-        float humidity;      // %RH
         float temperature;   // °C
+        float humidity;      // %RH
+        bool heaterEnabled;  // Heater status
         bool valid;
         int errorCount;
     };
 
     class Sensor {
     public:
-        Sensor(TwoWire& wire, uint8_t address = 0x5D);
+        Sensor(TwoWire& wire, uint8_t address = 0x44);
         
         bool begin();
-        bool startContinuousMeasurement();
-        bool stopContinuousMeasurement();
         bool readMeasurement(Data& data);
-        bool getDeviceMarking(char* deviceMarking, size_t size);
+        bool enableHeater(bool enable);
+        bool isHeaterEnabled() const;
         bool reset();
         bool isInitialized() const { return _initialized; }
         
     private:
-        SensirionI2cSfa3x _sfa;
+        Adafruit_SHT31 _sht31;
         TwoWire& _wire;
         uint8_t _address;
         bool _initialized;
-        bool _measurementStarted;
     };
 }

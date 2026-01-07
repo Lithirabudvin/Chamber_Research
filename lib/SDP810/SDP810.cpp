@@ -1,141 +1,111 @@
 #include "SDP810.h"
+#include <math.h>  // Add this for sqrt and abs functions
 
-SDP810::SDP810(TwoWire& wire, uint8_t address) 
-    : _wire(wire), _address(address) {}
+namespace SDP810 {
 
-bool SDP810::begin() {
-    _wire.begin();
-    delay(100);
-    
-    // Check if sensor is connected
-    _wire.beginTransmission(_address);
-    return (_wire.endTransmission() == 0);
-}
-
-bool SDP810::startContinuousMeasurement(MeasurementMode mode) {
-    _writeCommand(mode);
-    delay(20); // Wait for sensor to start
-    return true;
-}
-
-bool SDP810::readMeasurement(Data& data) {
-    uint16_t raw_pressure, raw_temperature;
-    uint8_t status;
-    
-    if (!_readRawData(raw_pressure, raw_temperature, status)) {
-        return false;
+    Sensor::Sensor(TwoWire& wire, uint8_t address) 
+        : _wire(wire), _address(address), _continuousMode(false) {
     }
-    
-    data.raw_pressure = raw_pressure;
-    data.raw_temperature = raw_temperature;
-    data.status = status;
-    data.differential_pressure = _convertPressure(raw_pressure);
-    data.temperature = _convertTemperature(raw_temperature);
-    data.air_flow = calculateAirFlow(data.differential_pressure);
-    data.air_velocity = calculateAirVelocity(data.differential_pressure);
-    
-    return true;
-}
 
-bool SDP810::triggerMeasurement(Data& data) {
-    // Send trigger command
-    _writeCommand(TRIGGERED_MEASUREMENT);
-    delay(20); // Wait for measurement
-    
-    return readMeasurement(data);
-}
-
-bool SDP810::softReset() {
-    _writeCommand(0x0006); // Soft reset command
-    delay(100); // Wait for reset
-    return true;
-}
-
-float SDP810::calculateAirFlow(float pressure, float diameter) {
-    // Using Bernoulli's equation for incompressible flow
-    // Q = A * √(2ΔP/ρ)
-    // Where: A = cross-sectional area, ρ = air density (1.225 kg/m³ at sea level)
-    
-    if (pressure < 0) pressure = -pressure; // Use absolute value
-    
-    float radius = diameter / 2.0;
-    float area = PI * radius * radius; // Cross-sectional area
-    float density = 1.225; // kg/m³ at 15°C, sea level
-    
-    // Convert Pa to flow rate (m³/s)
-    float flow = area * sqrt(2.0 * pressure / density);
-    
-    return flow;
-}
-
-float SDP810::calculateAirVelocity(float pressure, float diameter) {
-    // v = √(2ΔP/ρ)
-    float density = 1.225; // kg/m³
-    
-    if (pressure < 0) pressure = -pressure; // Use absolute value
-    
-    return sqrt(2.0 * pressure / density);
-}
-
-bool SDP810::isConnected() {
-    _wire.beginTransmission(_address);
-    return (_wire.endTransmission() == 0);
-}
-
-bool SDP810::_readRawData(uint16_t& pressure, uint16_t& temperature, uint8_t& status) {
-    uint8_t buffer[9];
-    
-    // Request 9 bytes (3 bytes per value + checksum)
-    _wire.requestFrom(_address, (uint8_t)9);
-    
-    if (_wire.available() < 9) {
-        return false;
+    bool Sensor::begin() {
+        _wire.beginTransmission(_address);
+        return _wire.endTransmission() == 0;
     }
-    
-    for (int i = 0; i < 9; i++) {
-        buffer[i] = _wire.read();
+
+    bool Sensor::startContinuousMeasurement(MeasurementMode mode) {
+        _wire.beginTransmission(_address);
+        _wire.write((mode >> 8) & 0xFF);
+        _wire.write(mode & 0xFF);
+        if (_wire.endTransmission() != 0) return false;
+        
+        _continuousMode = true;
+        delay(10);  // Allow sensor to start measurements
+        return true;
     }
-    
-    // Verify checksum (CRC8)
-    // For simplicity, we'll skip checksum verification in this basic version
-    // You can add CRC8 calculation if needed
-    
-    pressure = (buffer[0] << 8) | buffer[1];
-    temperature = (buffer[3] << 8) | buffer[4];
-    status = buffer[6];
-    
-    return true;
-}
 
-float SDP810::_convertPressure(uint16_t raw) {
-    // Convert raw value to Pascal
-    // SDP810-500Pa range: -500 to +500 Pa
-    int16_t signed_raw = (int16_t)raw;
-    return (signed_raw / 60.0); // Scale factor from datasheet
-}
-
-float SDP810::_convertTemperature(uint16_t raw) {
-    // Convert raw value to Celsius
-    return (raw / 200.0);
-}
-
-void SDP810::_writeCommand(uint16_t command) {
-    _wire.beginTransmission(_address);
-    _wire.write(command >> 8);    // MSB
-    _wire.write(command & 0xFF);  // LSB
-    _wire.endTransmission();
-}
-
-bool SDP810::_readResponse(uint8_t* buffer, uint8_t length) {
-    _wire.requestFrom(_address, length);
-    
-    if (_wire.available() < length) {
-        return false;
+    bool Sensor::stopContinuousMeasurement() {
+        _wire.beginTransmission(_address);
+        _wire.write(0x3F);
+        _wire.write(0xF9);
+        if (_wire.endTransmission() != 0) return false;
+        
+        _continuousMode = false;
+        return true;
     }
-    
-    for (uint8_t i = 0; i < length; i++) {
-        buffer[i] = _wire.read();
+
+    bool Sensor::readMeasurement(Data& data) {
+        if (!_continuousMode) return false;
+        
+        int16_t diff_pressure_raw, temperature_raw;
+        if (!_readRawValues(diff_pressure_raw, temperature_raw)) {
+            return false;
+        }
+        
+        // Convert raw values to engineering units
+        data.differential_pressure = diff_pressure_raw / 60.0f;  // Scale factor from datasheet
+        data.temperature = temperature_raw / 200.0f;            // Scale factor from datasheet
+        data.air_flow = _calculateAirFlow(data.differential_pressure);
+        data.air_velocity = _calculateAirVelocity(data.differential_pressure);
+        data.valid = true;
+        
+        return true;
     }
-    
-    return true;
+
+    bool Sensor::_readRawValues(int16_t& differential_pressure_raw, int16_t& temperature_raw) {
+        _wire.requestFrom(_address, (uint8_t)9);
+        
+        if (_wire.available() < 9) return false;
+        
+        uint8_t data[9];
+        for (int i = 0; i < 9; i++) {
+            data[i] = _wire.read();
+        }
+        
+        // Check CRC for differential pressure
+        if (_crc8(&data[0], 2) != data[2]) return false;
+        
+        // Check CRC for temperature
+        if (_crc8(&data[3], 2) != data[5]) return false;
+        
+        differential_pressure_raw = (data[0] << 8) | data[1];
+        temperature_raw = (data[3] << 8) | data[4];
+        
+        return true;
+    }
+
+    float Sensor::_calculateAirFlow(float differential_pressure) {
+        // Simplified calculation - adjust based on your duct size
+        // Flow = velocity * area, with velocity calculated from pressure
+        const float density = 1.225f;  // Air density kg/m³
+        const float area = 0.001f;     // Duct cross-sectional area m²
+        
+        if (differential_pressure >= 0) {
+            return sqrt((2 * fabs(differential_pressure)) / density) * area;
+        }
+        return -sqrt((2 * fabs(differential_pressure)) / density) * area;
+    }
+
+    float Sensor::_calculateAirVelocity(float differential_pressure) {
+        const float density = 1.225f;  // Air density kg/m³
+        
+        if (differential_pressure >= 0) {
+            return sqrt((2 * fabs(differential_pressure)) / density);
+        }
+        return -sqrt((2 * fabs(differential_pressure)) / density);
+    }
+
+    uint8_t Sensor::_crc8(const uint8_t* data, size_t length) {
+        uint8_t crc = 0xFF;
+        for (size_t i = 0; i < length; i++) {
+            crc ^= data[i];
+            for (uint8_t bit = 8; bit > 0; --bit) {
+                if (crc & 0x80) {
+                    crc = (crc << 1) ^ 0x31;
+                } else {
+                    crc = (crc << 1);
+                }
+            }
+        }
+        return crc;
+    }
 }
