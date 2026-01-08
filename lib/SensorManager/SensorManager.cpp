@@ -171,14 +171,18 @@ void SensorManager::manageHeaters() {
         _lastHeaterToggle1 = now;
         _shtHeaterEnabled1 = !_shtHeaterEnabled1;
         _shtSensor1.enableHeater(_shtHeaterEnabled1);
+        // Force read heater status immediately
         _shtData1.heaterEnabled = _shtHeaterEnabled1;
+        Serial.printf("[SHT31 #1] Heater %s\n", _shtHeaterEnabled1 ? "ON" : "OFF");
     }
     
     if (_shtActive2 && now - _lastHeaterToggle2 >= HEATER_INTERVAL) {
         _lastHeaterToggle2 = now;
         _shtHeaterEnabled2 = !_shtHeaterEnabled2;
         _shtSensor2.enableHeater(_shtHeaterEnabled2);
+        // Force read heater status immediately
         _shtData2.heaterEnabled = _shtHeaterEnabled2;
+        Serial.printf("[SHT31 #2] Heater %s\n", _shtHeaterEnabled2 ? "ON" : "OFF");
     }
 }
 
