@@ -12,6 +12,26 @@ namespace SDP810 {
         return _wire.endTransmission() == 0;
     }
 
+    // ADD THIS SIMPLE READ FUNCTION
+    bool Sensor::readSimple(float& pressure, float& temperature) {
+        // Start continuous measurement if not already started
+        if (!_continuousMode) {
+            if (!startContinuousMeasurement()) {
+                return false;
+            }
+            delay(10); // Small delay after starting
+        }
+        
+        Data data;
+        if (!readMeasurement(data)) {
+            return false;
+        }
+        
+        pressure = data.differential_pressure;
+        temperature = data.temperature;
+        return true;
+    }
+
     bool Sensor::startContinuousMeasurement(MeasurementMode mode) {
         _wire.beginTransmission(_address);
         _wire.write((mode >> 8) & 0xFF);

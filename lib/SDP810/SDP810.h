@@ -26,6 +26,7 @@ namespace SDP810 {
         bool startContinuousMeasurement(MeasurementMode mode = CONTINUOUS_MEASUREMENT);
         bool readMeasurement(Data& data);
         bool stopContinuousMeasurement();
+        bool readSimple(float& pressure, float& temperature);  // ADD THIS
         uint8_t getAddress() const { return _address; }
         
     private:
@@ -36,6 +37,6 @@ namespace SDP810 {
         bool _readRawValues(int16_t& differential_pressure_raw, int16_t& temperature_raw);
         float _calculateAirFlow(float differential_pressure);
         float _calculateAirVelocity(float differential_pressure);
-        uint8_t _crc8(const uint8_t* data, size_t length);  // Add this declaration
+        uint8_t _crc8(const uint8_t* data, size_t length);
     };
 }

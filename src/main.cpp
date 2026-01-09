@@ -7,6 +7,9 @@ const char* WIFI_SSID = "ABC";
 const char* WIFI_PASSWORD = "zzom5037";
 const char* GATEWAY_TOKEN = "cqb5Xa3H3SkJPJ1NhXtk";
 
+// Global variables
+bool sdp810Verified = false;
+
 // Global objects
 SensorManager::I2CConfig i2cConfig;
 SensorManager::PMSConfig pmsConfig;
@@ -281,69 +284,83 @@ void printSHTData(const SHT31::Data& data, int sensorNum) {
     Serial.println("└──────────────────────────────────────┘");
 }
 
+// ADD THIS FUNCTION TO VERIFY SDP810
+void verifySDP810() {
+    Serial.println("\n╔════════════════════════════════════════╗");
+    Serial.println("║        VERIFYING SDP810 SENSOR        ║");
+    Serial.println("╚════════════════════════════════════════╝\n");
+    
+    // Use the SDP810 sensor from sensorManager
+    if (sensorManager.isSDPActive()) {
+        Serial.println("[SDP810] Sensor detected at address 0x25");
+        
+        // Try to read 5 times to verify
+        int successfulReads = 0;
+        float avgPressure = 0;
+        float avgTemp = 0;
+        
+        for (int i = 0; i < 5; i++) {
+            if (sensorManager.readSDP()) {
+                const SDP810::Data& data = sensorManager.getSDPData();
+                if (data.valid) {
+                    successfulReads++;
+                    avgPressure += data.differential_pressure;
+                    avgTemp += data.temperature;
+                    
+                    Serial.printf("  Read #%d: Pressure=%+7.2f Pa, Temp=%6.2f°C\n", 
+                                 i+1, data.differential_pressure, data.temperature);
+                }
+            }
+            delay(500);
+        }
+        
+        if (successfulReads > 0) {
+            avgPressure /= successfulReads;
+            avgTemp /= successfulReads;
+            
+            Serial.println("\n[VERIFICATION RESULTS]");
+            Serial.printf("  Successful reads: %d/5\n", successfulReads);
+            Serial.printf("  Average pressure: %+7.2f Pa\n", avgPressure);
+            Serial.printf("  Average temperature: %6.2f°C\n", avgTemp);
+            
+            // Check if values are reasonable
+            bool tempReasonable = (avgTemp > -40 && avgTemp < 125);
+            bool pressureReasonable = (abs(avgPressure) < 1000);
+            
+            if (tempReasonable && pressureReasonable) {
+                Serial.println("  ✓ SDP810 is WORKING CORRECTLY!");
+                sdp810Verified = true;
+            } else {
+                if (!tempReasonable) Serial.println("  ✗ Temperature out of range!");
+                if (!pressureReasonable) Serial.println("  ✗ Pressure out of range!");
+            }
+        } else {
+            Serial.println("  ✗ Failed to read any valid data!");
+        }
+    } else {
+        Serial.println("  ✗ SDP810 sensor not detected!");
+    }
+    
+    Serial.println("\n════════════════════════════════════════\n");
+}
+
 void setup() {
     Serial.begin(115200);
     delay(2000);
     
-    // Configure ThingsBoard with faster updates for real-time data
-    tbConfig.serverUrl = "cloud.thingsnode.cc";
-    tbConfig.serverPort = 1883;
-    tbConfig.gatewayToken = GATEWAY_TOKEN;
-    tbConfig.wifiSSID = WIFI_SSID;
-    tbConfig.wifiPassword = WIFI_PASSWORD;
-    tbConfig.sendInterval = 5000;  // Send every 5 seconds for more real-time updates
-    tbConfig.useSSL = false;
-    
-    // Set your timezone offset in seconds
-    // Examples:
-    // UTC+0: 0
-    // UTC+5:30 (IST): 19800
-    // UTC-5 (EST): -18000
-    // UTC+8 (China): 28800
-    tbConfig.gmtOffset_sec = 19800;  // Change this to your timezone
-    tbConfig.daylightOffset_sec = 0;
-    
-    thingsBoard = new ThingsBoardClient(tbConfig);
-    
     Serial.println("\n════════════════════════════════════════");
     Serial.println("    ESP32 AIR QUALITY MONITORING");
     Serial.println("    with ThingsBoard Gateway MQTT");
+    Serial.println("    and SDP810 Air Flow Sensor");
     Serial.println("════════════════════════════════════════");
     Serial.println("  Version: 2.0 (Real-time)");
-    Serial.println("  ThingsBoard Server: " + String(tbConfig.serverUrl));
+    Serial.println("  ThingsBoard Server: cloud.thingsnode.cc");
     Serial.println("  Gateway Token: " + String(GATEWAY_TOKEN));
     Serial.println("  WiFi: " + String(WIFI_SSID));
-    Serial.println("  Send Interval: " + String(tbConfig.sendInterval / 1000) + " seconds");
     Serial.println("════════════════════════════════════════\n");
     
-    // Connect to WiFi and initialize ThingsBoard
-    Serial.println("[System] Initializing WiFi and MQTT Gateway...");
-    if (thingsBoard->begin()) {
-        Serial.println("[System] ✓ WiFi connected");
-        
-        if (thingsBoard->isTimeSync()) {
-            Serial.println("[System] ✓ Time synchronized with NTP");
-        } else {
-            Serial.println("[System] ⚠ Time sync failed - timestamps may be inaccurate");
-        }
-        
-        Serial.println("[System] Waiting for MQTT connection...");
-        delay(2000); // Give MQTT time to connect
-    } else {
-        Serial.println("[System] ✗ WiFi connection failed!");
-        Serial.println("  Continuing in offline mode...");
-        Serial.println("  Local monitoring active, Cloud upload disabled.");
-    }
-    
-    delay(3000); // Wait for MQTT to stabilize
-    
-    Serial.println("\n[Debug] Checking MQTT connection...");
-    Serial.println("  MQTT Connected: " + String(thingsBoard->isMQTTConnected() ? "YES" : "NO"));
-    Serial.println("  Time Synced: " + String(thingsBoard->isTimeSync() ? "YES" : "NO"));
-    Serial.println("  Gateway Token: " + String(GATEWAY_TOKEN));
-    
-    // Initialize all sensors
-    Serial.println("\n[Sensors] Initializing 12 sensors...");
+    // Initialize sensor manager first
+    Serial.println("\n[System] Initializing 12 sensors...");
     if (!sensorManager.begin()) {
         Serial.println("[ERROR] Failed to initialize sensors!");
         while (1) {
@@ -352,12 +369,68 @@ void setup() {
         }
     }
     
+    // VERIFY SDP810 BEFORE CONTINUING
+    verifySDP810();
+    
+    // Only continue if SDP810 is verified or user wants to continue anyway
+    if (!sdp810Verified) {
+        Serial.println("\n⚠ WARNING: SDP810 verification failed!");
+        Serial.println("  Options:");
+        Serial.println("  1. Check sensor wiring (SDA=21, SCL=22)");
+        Serial.println("  2. Verify sensor is powered (3.3V)");
+        Serial.println("  3. Press RESET to try again");
+        Serial.println("  4. Continue without SDP810 (data may be invalid)");
+        Serial.println("\nContinuing in 5 seconds...");
+        delay(5000);
+    }
+    
+    // Configure ThingsBoard
+    tbConfig.serverUrl = "cloud.thingsnode.cc";
+    tbConfig.serverPort = 1883;
+    tbConfig.gatewayToken = GATEWAY_TOKEN;
+    tbConfig.wifiSSID = WIFI_SSID;
+    tbConfig.wifiPassword = WIFI_PASSWORD;
+    tbConfig.sendInterval = 5000;
+    tbConfig.useSSL = false;
+    tbConfig.gmtOffset_sec = 19800;
+    tbConfig.daylightOffset_sec = 0;
+    
+    thingsBoard = new ThingsBoardClient(tbConfig);
+    
+    Serial.println("\n[System] Initializing WiFi and MQTT Gateway...");
+    if (thingsBoard->begin()) {
+        Serial.println("[System] ✓ WiFi connected");
+        
+        if (thingsBoard->isTimeSync()) {
+            Serial.println("[System] ✓ Time synchronized with NTP");
+        }
+        
+        Serial.println("[System] Waiting for MQTT connection...");
+        delay(2000);
+    } else {
+        Serial.println("[System] ✗ WiFi connection failed!");
+        Serial.println("  Continuing in offline mode...");
+        Serial.println("  Local monitoring active, Cloud upload disabled.");
+    }
+    
+    delay(3000);
+    
+    Serial.println("\n[Debug] Checking MQTT connection...");
+    Serial.println("  MQTT Connected: " + String(thingsBoard->isMQTTConnected() ? "YES" : "NO"));
+    Serial.println("  Time Synced: " + String(thingsBoard->isTimeSync() ? "YES" : "NO"));
+    Serial.println("  Gateway Token: " + String(GATEWAY_TOKEN));
+    
     // Print initial status
     printSensorStatus();
     
     Serial.println("\n════════════════════════════════════════");
     Serial.println("        STARTING MONITORING");
     Serial.println("════════════════════════════════════════");
+    if (sdp810Verified) {
+        Serial.println("  SDP810: ✓ VERIFIED AND WORKING");
+    } else {
+        Serial.println("  SDP810: ⚠ NOT VERIFIED / DISABLED");
+    }
     Serial.println("Local display interval:   5 seconds");
     Serial.println("Cloud upload interval:    5 seconds (REAL-TIME)");
     Serial.println("Total sensors:           12");
@@ -372,6 +445,7 @@ void setup() {
 void loop() {
     static bool sdpOk = false;
     static unsigned long lastReadTime = 0;
+    static unsigned long lastSDP810SimpleRead = 0;
     
     unsigned long now = millis();
     
@@ -388,12 +462,28 @@ void loop() {
         sensorManager.readPMS1();
         sensorManager.readPMS2();
         
-        // Read SDP810
-        if (sensorManager.isSDPActive()) {
+        // Read SDP810 (only if verified)
+        if (sensorManager.isSDPActive() && sdp810Verified) {
             sdpOk = sensorManager.readSDP();
+            
+            // Optional: Add simple verification during operation
+            if (now - lastSDP810SimpleRead >= 30000) { // Every 30 seconds
+                lastSDP810SimpleRead = now;
+                
+                if (sdpOk) {
+                    const SDP810::Data& data = sensorManager.getSDPData();
+                    Serial.printf("[SDP810 Check] Pressure: %+7.2f Pa, Temp: %6.2f°C\n",
+                                 data.differential_pressure, data.temperature);
+                    
+                    // Re-verify if values become unreasonable
+                    if (data.temperature < -40 || data.temperature > 125) {
+                        Serial.println("[SDP810] ⚠ Temperature reading out of range!");
+                    }
+                }
+            }
         }
         
-        // Read I2C sensors
+        // Read other I2C sensors
         sensorManager.readSCD();
         sensorManager.readSFA1();
         sensorManager.readSFA2();
@@ -445,6 +535,15 @@ void loop() {
                      sensorManager.getAverageTemperature(), 
                      sensorManager.getAverageHumidity());
         
+        // ADD SDP810 STATUS
+        if (sdp810Verified) {
+            Serial.println("  SDP810: ✓ Verified and active");
+        } else if (sensorManager.isSDPActive()) {
+            Serial.println("  SDP810: ⚠ Active but not verified");
+        } else {
+            Serial.println("  SDP810: ✗ Not detected");
+        }
+        
         // Show WiFi and MQTT status
         if (thingsBoard) {
             Serial.println("  WiFi: " + thingsBoard->getWiFiStatus());
@@ -483,7 +582,7 @@ void loop() {
         if (sdpOk) {
             printSDPData(sensorManager.getSDPData());
             sdpOk = false;
-        } else if (sensorManager.isSDPActive()) {
+        } else if (sensorManager.isSDPActive() && sdp810Verified) {
             Serial.println("[SDP810] No new data");
         }
         

@@ -69,6 +69,6 @@ private:
     bool _sendGatewayTelemetryMQTT(const SensorManager& sensorManager);
     bool _connectDevicesToGateway();
     bool _connectDeviceToGateway(const String& deviceName);
-    void _addGatewaySensorData(JsonDocument& doc, const SensorManager& sensorManager);
+    void _addGatewaySensorData(JsonDocument& doc, const SensorManager& sensorManager);  // ADD THIS
     void _mqttCallback(char* topic, byte* payload, unsigned int length);
 };

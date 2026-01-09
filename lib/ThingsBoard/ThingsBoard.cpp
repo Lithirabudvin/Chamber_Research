@@ -376,7 +376,7 @@ bool ThingsBoardClient::_sendGatewayTelemetryMQTT(const SensorManager& sensorMan
 bool ThingsBoardClient::_connectDevicesToGateway() {
     Serial.println("[Gateway] Connecting devices to gateway via MQTT...");
     
-    // List of devices to connect
+    // List of devices to connect (ADDED SDP810!)
     const char* devices[] = {
         "SCD40(CO2)",
         "SGP41(TVOC)_IN",
@@ -387,6 +387,7 @@ bool ThingsBoardClient::_connectDevicesToGateway() {
         "PMS5003(PM2.5)_OUT",
         "SHT30(TEMP)_IN",
         "SHT30(TEMP)_OUT",
+        "SDP810(AIRFLOW)",  // <- ADDED THIS!
         "Gateway"
     };
     
@@ -460,7 +461,6 @@ void ThingsBoardClient::_mqttCallback(char* topic, byte* payload, unsigned int l
     }
 }
 
-// Add this method to header file too
 void ThingsBoardClient::_addGatewaySensorData(JsonDocument& doc, const SensorManager& sensorManager) {
     // Get current Unix timestamp in milliseconds
     unsigned long long currentTs = getEpochMillis();
@@ -594,7 +594,30 @@ void ThingsBoardClient::_addGatewaySensorData(JsonDocument& doc, const SensorMan
         values["heater_enabled"] = d.heaterEnabled;
     }
     
-    // 10. Gateway device info
+    // 10. SDP810 - Device: "SDP810(AIRFLOW)" <- ADDED THIS!
+    if (sensorManager.isSDPActive() && sensorManager.getSDPData().valid) {
+        JsonArray deviceArray = doc["SDP810(AIRFLOW)"].to<JsonArray>();
+        JsonObject dataPoint = deviceArray.add<JsonObject>();
+        dataPoint["ts"] = currentTs;
+        
+        JsonObject values = dataPoint["values"].to<JsonObject>();
+        const SDP810::Data& d = sensorManager.getSDPData();
+        values["differential_pressure"] = d.differential_pressure;
+        values["temperature"] = d.temperature;
+        values["air_flow"] = d.air_flow;
+        values["air_velocity"] = d.air_velocity;
+        
+        // Add interpretation for easier understanding
+        if (abs(d.differential_pressure) < 0.5) {
+            values["flow_status"] = "no_flow";
+        } else if (d.differential_pressure > 0) {
+            values["flow_status"] = "forward";
+        } else {
+            values["flow_status"] = "reverse";
+        }
+    }
+    
+    // 11. Gateway device info
     JsonArray gatewayArray = doc["Gateway"].to<JsonArray>();
     JsonObject gatewayPoint = gatewayArray.add<JsonObject>();
     gatewayPoint["ts"] = currentTs;
@@ -606,4 +629,5 @@ void ThingsBoardClient::_addGatewaySensorData(JsonDocument& doc, const SensorMan
     gatewayValues["wifi_ssid"] = WiFi.SSID();
     gatewayValues["ip_address"] = WiFi.localIP().toString();
     gatewayValues["time_synced"] = _timeSynced;
+    gatewayValues["sdp810_verified"] = sensorManager.getSDPData().valid; // Add SDP810 status
 }
