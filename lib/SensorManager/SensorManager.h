@@ -82,10 +82,11 @@ public:
     float getAverageTemperature() const;
     float getAverageHumidity() const;
     
-private:
     // I2C bus recovery
-    void _recoverI2CBus();
+    void recoverMainI2CBus();
+    void recoverAltI2CBus();
     
+private:
     // Configurations
     I2CConfig _i2cConfig;
     PMSConfig _pmsConfig;
@@ -142,4 +143,9 @@ private:
     // PMS timeout configuration
     const unsigned long PMS_DATA_TIMEOUT = 5000;  // 5 seconds
     const unsigned long PMS_DISCONNECTION_TIMEOUT = 10000;  // 10 seconds
+    
+    // I2C bus status
+    unsigned long _lastMainBusRecovery;
+    unsigned long _lastAltBusRecovery;
+    const unsigned long BUS_RECOVERY_INTERVAL = 30000;  // 30 seconds
 };

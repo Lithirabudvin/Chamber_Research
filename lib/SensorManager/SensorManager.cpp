@@ -21,23 +21,23 @@ SensorManager::SensorManager(const I2CConfig& i2cConfig, const PMSConfig& pmsCon
       _sgpActive1(false), _sgpActive2(false),
       _shtActive1(false), _shtActive2(false),
       _lastHeaterToggle1(0), _lastHeaterToggle2(0),
-      _shtHeaterEnabled1(false), _shtHeaterEnabled2(false) {
+      _shtHeaterEnabled1(false), _shtHeaterEnabled2(false),
+      _lastMainBusRecovery(0), _lastAltBusRecovery(0) {
 }
 
 bool SensorManager::begin() {
     Serial.println("\n[SensorManager] Initializing...");
     
-    // First, recover I2C bus in case it's stuck
-    _recoverI2CBus();
-    
     // Initialize main I2C bus (pins 21/22)
     Serial.printf("  Main I2C: SDA=%d, SCL=%d\n", _i2cConfig.mainSDA, _i2cConfig.mainSCL);
+    recoverMainI2CBus();
     Wire.begin(_i2cConfig.mainSDA, _i2cConfig.mainSCL);
     Wire.setClock(100000);
     delay(100);
     
     // Initialize alternate I2C bus (pins 25/26)
     Serial.printf("  Alt I2C:  SDA=%d, SCL=%d\n", _i2cConfig.altSDA, _i2cConfig.altSCL);
+    recoverAltI2CBus();
     _altWire.begin(_i2cConfig.altSDA, _i2cConfig.altSCL);
     _altWire.setClock(100000);
     delay(100);
@@ -112,32 +112,43 @@ bool SensorManager::begin() {
     
     // Initialize SCD40
     Serial.println("\n[SCD40] Initializing...");
-    _scdActive = _scdSensor.begin();
-    if (_scdActive) {
-        _scdActive = _scdSensor.startPeriodicMeasurement();
-        _scdSensor.setAutomaticSelfCalibration(true);
-        Serial.println("  ✓ SCD40 initialized");
-    } else {
-        Serial.println("  ✗ SCD40 not detected");
+    for (int attempt = 1; attempt <= 2; attempt++) {
+        _scdActive = _scdSensor.begin();
+        if (_scdActive) {
+            _scdActive = _scdSensor.startPeriodicMeasurement();
+            if (_scdActive) {
+                _scdSensor.setAutomaticSelfCalibration(true);
+                Serial.println("  ✓ SCD40 initialized");
+                break;
+            }
+        }
+        if (attempt < 2) {
+            Serial.print("  Attempt "); Serial.print(attempt); Serial.println(" failed, retrying...");
+            delay(100);
+        } else {
+            Serial.println("  ✗ SCD40 not detected");
+        }
     }
     
     // Initialize SHT31 sensors
     Serial.println("\n[SHT31] Initializing...");
-    _shtActive1 = _shtSensor1.begin();
-    _shtActive2 = _shtSensor2.begin();
-    
-    if (_shtActive1) {
-        _shtSensor1.enableHeater(false);
-        Serial.println("  ✓ SHT31 #1 initialized");
-    } else {
-        Serial.println("  ✗ SHT31 #1 not detected");
-    }
-    
-    if (_shtActive2) {
-        _shtSensor2.enableHeater(false);
-        Serial.println("  ✓ SHT31 #2 initialized");
-    } else {
-        Serial.println("  ✗ SHT31 #2 not detected");
+    for (int attempt = 1; attempt <= 2; attempt++) {
+        _shtActive1 = _shtSensor1.begin();
+        _shtActive2 = _shtSensor2.begin();
+        
+        if (_shtActive1 && _shtActive2) {
+            _shtSensor1.enableHeater(false);
+            _shtSensor2.enableHeater(false);
+            Serial.println("  ✓ SHT31 #1 and #2 initialized");
+            break;
+        }
+        if (attempt < 2) {
+            Serial.print("  Attempt "); Serial.print(attempt); Serial.println(" failed, retrying...");
+            delay(100);
+        } else {
+            if (!_shtActive1) Serial.println("  ✗ SHT31 #1 not detected");
+            if (!_shtActive2) Serial.println("  ✗ SHT31 #2 not detected");
+        }
     }
     
     // Initialize SFA30 sensors
@@ -145,22 +156,42 @@ bool SensorManager::begin() {
     
     // SFA30 #1 on main bus (21/22)
     Serial.println("  SFA30 #1: Main bus (SDA=21, SCL=22)");
-    _sfaActive1 = _sfaSensor1.begin();
-    if (_sfaActive1) {
-        _sfaActive1 = _sfaSensor1.startContinuousMeasurement();
-        Serial.println("    ✓ SFA30 #1 initialized");
-    } else {
-        Serial.println("    ✗ SFA30 #1 not detected");
+    for (int attempt = 1; attempt <= 3; attempt++) {
+        _sfaActive1 = _sfaSensor1.begin();
+        if (_sfaActive1) {
+            _sfaActive1 = _sfaSensor1.startContinuousMeasurement();
+            if (_sfaActive1) {
+                Serial.println("    ✓ SFA30 #1 initialized");
+                break;
+            }
+        }
+        if (attempt < 3) {
+            Serial.print("    Attempt "); Serial.print(attempt); Serial.println(" failed, retrying...");
+            delay(100);
+            recoverMainI2CBus();
+        } else {
+            Serial.println("    ✗ SFA30 #1 not detected");
+        }
     }
     
     // SFA30 #2 on alternate bus (25/26)
     Serial.println("  SFA30 #2: Alternate bus (SDA=25, SCL=26)");
-    _sfaActive2 = _sfaSensor2.begin();
-    if (_sfaActive2) {
-        _sfaActive2 = _sfaSensor2.startContinuousMeasurement();
-        Serial.println("    ✓ SFA30 #2 initialized");
-    } else {
-        Serial.println("    ✗ SFA30 #2 not detected");
+    for (int attempt = 1; attempt <= 3; attempt++) {
+        _sfaActive2 = _sfaSensor2.begin();
+        if (_sfaActive2) {
+            _sfaActive2 = _sfaSensor2.startContinuousMeasurement();
+            if (_sfaActive2) {
+                Serial.println("    ✓ SFA30 #2 initialized");
+                break;
+            }
+        }
+        if (attempt < 3) {
+            Serial.print("    Attempt "); Serial.print(attempt); Serial.println(" failed, retrying...");
+            delay(100);
+            recoverAltI2CBus();
+        } else {
+            Serial.println("    ✗ SFA30 #2 not detected");
+        }
     }
     
     // Initialize SGP41 sensors
@@ -168,20 +199,36 @@ bool SensorManager::begin() {
     
     // SGP41 #1 on main bus (21/22)
     Serial.println("  SGP41 #1: Main bus (SDA=21, SCL=22)");
-    _sgpActive1 = _sgpSensor1.begin();
-    if (_sgpActive1) {
-        Serial.println("    ✓ SGP41 #1 initialized");
-    } else {
-        Serial.println("    ✗ SGP41 #1 not detected");
+    for (int attempt = 1; attempt <= 3; attempt++) {
+        _sgpActive1 = _sgpSensor1.begin();
+        if (_sgpActive1) {
+            Serial.println("    ✓ SGP41 #1 initialized");
+            break;
+        }
+        if (attempt < 3) {
+            Serial.print("    Attempt "); Serial.print(attempt); Serial.println(" failed, retrying...");
+            delay(100);
+            recoverMainI2CBus();
+        } else {
+            Serial.println("    ✗ SGP41 #1 not detected");
+        }
     }
     
     // SGP41 #2 on alternate bus (25/26)
     Serial.println("  SGP41 #2: Alternate bus (SDA=25, SCL=26)");
-    _sgpActive2 = _sgpSensor2.begin();
-    if (_sgpActive2) {
-        Serial.println("    ✓ SGP41 #2 initialized");
-    } else {
-        Serial.println("    ✗ SGP41 #2 not detected");
+    for (int attempt = 1; attempt <= 3; attempt++) {
+        _sgpActive2 = _sgpSensor2.begin();
+        if (_sgpActive2) {
+            Serial.println("    ✓ SGP41 #2 initialized");
+            break;
+        }
+        if (attempt < 3) {
+            Serial.print("    Attempt "); Serial.print(attempt); Serial.println(" failed, retrying...");
+            delay(100);
+            recoverAltI2CBus();
+        } else {
+            Serial.println("    ✗ SGP41 #2 not detected");
+        }
     }
     
     // Print summary
@@ -202,20 +249,30 @@ bool SensorManager::begin() {
     return true;
 }
 
-void SensorManager::_recoverI2CBus() {
-    Serial.println("[I2C Recovery] Attempting bus recovery...");
+void SensorManager::recoverMainI2CBus() {
+    unsigned long now = millis();
+    if (now - _lastMainBusRecovery < BUS_RECOVERY_INTERVAL) {
+        return;
+    }
+    _lastMainBusRecovery = now;
+    
+    Serial.println("[Main I2C] Checking bus...");
     
     pinMode(_i2cConfig.mainSDA, INPUT_PULLUP);
     pinMode(_i2cConfig.mainSCL, INPUT_PULLUP);
-    delay(100);
+    delay(10);
     
-    if (digitalRead(_i2cConfig.mainSDA) == LOW || digitalRead(_i2cConfig.mainSCL) == LOW) {
-        Serial.println("  I2C bus appears stuck. Attempting clock recovery...");
+    bool sdaStuck = digitalRead(_i2cConfig.mainSDA) == LOW;
+    bool sclStuck = digitalRead(_i2cConfig.mainSCL) == LOW;
+    
+    if (sdaStuck || sclStuck) {
+        Serial.println("  Main I2C bus appears stuck. Attempting recovery...");
         
         pinMode(_i2cConfig.mainSDA, OUTPUT);
         digitalWrite(_i2cConfig.mainSDA, HIGH);
         pinMode(_i2cConfig.mainSCL, OUTPUT);
         
+        // Generate clock pulses
         for (int i = 0; i < 10; i++) {
             digitalWrite(_i2cConfig.mainSCL, LOW);
             delayMicroseconds(5);
@@ -223,6 +280,7 @@ void SensorManager::_recoverI2CBus() {
             delayMicroseconds(5);
         }
         
+        // Generate STOP condition
         digitalWrite(_i2cConfig.mainSDA, LOW);
         delayMicroseconds(5);
         digitalWrite(_i2cConfig.mainSCL, HIGH);
@@ -233,37 +291,113 @@ void SensorManager::_recoverI2CBus() {
         pinMode(_i2cConfig.mainSDA, INPUT_PULLUP);
         pinMode(_i2cConfig.mainSCL, INPUT_PULLUP);
         
-        Serial.println("  Clock recovery complete");
+        Serial.println("  Main I2C bus recovery complete");
     } else {
-        Serial.println("  I2C bus appears free");
+        Serial.println("  Main I2C bus appears free");
+    }
+    
+    delay(50);
+}
+
+void SensorManager::recoverAltI2CBus() {
+    unsigned long now = millis();
+    if (now - _lastAltBusRecovery < BUS_RECOVERY_INTERVAL) {
+        return;
+    }
+    _lastAltBusRecovery = now;
+    
+    Serial.println("[Alt I2C] Checking bus...");
+    
+    pinMode(_i2cConfig.altSDA, INPUT_PULLUP);
+    pinMode(_i2cConfig.altSCL, INPUT_PULLUP);
+    delay(10);
+    
+    bool sdaStuck = digitalRead(_i2cConfig.altSDA) == LOW;
+    bool sclStuck = digitalRead(_i2cConfig.altSCL) == LOW;
+    
+    if (sdaStuck || sclStuck) {
+        Serial.println("  Alt I2C bus appears stuck. Attempting recovery...");
+        
+        pinMode(_i2cConfig.altSDA, OUTPUT);
+        digitalWrite(_i2cConfig.altSDA, HIGH);
+        pinMode(_i2cConfig.altSCL, OUTPUT);
+        
+        // Generate clock pulses
+        for (int i = 0; i < 10; i++) {
+            digitalWrite(_i2cConfig.altSCL, LOW);
+            delayMicroseconds(5);
+            digitalWrite(_i2cConfig.altSCL, HIGH);
+            delayMicroseconds(5);
+        }
+        
+        // Generate STOP condition
+        digitalWrite(_i2cConfig.altSDA, LOW);
+        delayMicroseconds(5);
+        digitalWrite(_i2cConfig.altSCL, HIGH);
+        delayMicroseconds(5);
+        digitalWrite(_i2cConfig.altSDA, HIGH);
+        delayMicroseconds(5);
+        
+        pinMode(_i2cConfig.altSDA, INPUT_PULLUP);
+        pinMode(_i2cConfig.altSCL, INPUT_PULLUP);
+        
+        Serial.println("  Alt I2C bus recovery complete");
+    } else {
+        Serial.println("  Alt I2C bus appears free");
     }
     
     delay(50);
 }
 
 bool SensorManager::readSDP() {
-    if (!_sdpActive) return false;
+    if (!_sdpActive) {
+        // Try to recover SDP810
+        static unsigned long lastRecoveryAttempt = 0;
+        unsigned long now = millis();
+        
+        if (now - lastRecoveryAttempt > 30000) {
+            lastRecoveryAttempt = now;
+            Serial.println("[SDP810] Attempting recovery...");
+            recoverMainI2CBus();
+            _sdpActive = _sdpSensor.begin();
+            if (_sdpActive) {
+                _sdpActive = _sdpSensor.startContinuousMeasurement();
+                if (_sdpActive) {
+                    Serial.println("[SDP810] ✓ Recovery successful");
+                }
+            }
+        }
+        return false;
+    }
     
     bool success = _sdpSensor.readMeasurement(_sdpData);
     
     // If reading fails, try to recover
-    if (!success && _sdpActive) {
-        Serial.println("[SDP810] Read failed, attempting recovery...");
-        
-        _sdpSensor.stopContinuousMeasurement();
-        delay(50);
-        _sdpActive = _sdpSensor.startContinuousMeasurement();
-        delay(50);
-        
-        if (_sdpActive) {
-            success = _sdpSensor.readMeasurement(_sdpData);
-            if (success) {
-                Serial.println("[SDP810] ✓ Recovery successful");
-            } else {
-                Serial.println("[SDP810] ✗ Recovery failed");
-                _sdpActive = false;
+    static int failCount = 0;
+    if (!success) {
+        failCount++;
+        if (failCount > 5) {
+            Serial.println("[SDP810] Multiple read failures, attempting recovery...");
+            
+            _sdpSensor.stopContinuousMeasurement();
+            delay(50);
+            recoverMainI2CBus();
+            _sdpActive = _sdpSensor.startContinuousMeasurement();
+            delay(50);
+            
+            if (_sdpActive) {
+                success = _sdpSensor.readMeasurement(_sdpData);
+                if (success) {
+                    Serial.println("[SDP810] ✓ Recovery successful");
+                    failCount = 0;
+                } else {
+                    Serial.println("[SDP810] ✗ Recovery failed");
+                    _sdpActive = false;
+                }
             }
         }
+    } else {
+        failCount = 0;
     }
     
     return success;
@@ -272,6 +406,16 @@ bool SensorManager::readSDP() {
 bool SensorManager::readPMS1() {
     if (!_pmsActive1) {
         _pmsData1.valid = false;
+        
+        // Try to recover
+        static unsigned long lastRecoveryAttempt = 0;
+        unsigned long now = millis();
+        
+        if (now - lastRecoveryAttempt > 30000) {
+            lastRecoveryAttempt = now;
+            Serial.println("[PMS5003 #1] Attempting recovery...");
+            _pmsActive1 = _pmsSensor1.begin();
+        }
         return false;
     }
     
@@ -296,6 +440,16 @@ bool SensorManager::readPMS1() {
 bool SensorManager::readPMS2() {
     if (!_pmsActive2) {
         _pmsData2.valid = false;
+        
+        // Try to recover
+        static unsigned long lastRecoveryAttempt = 0;
+        unsigned long now = millis();
+        
+        if (now - lastRecoveryAttempt > 30000) {
+            lastRecoveryAttempt = now;
+            Serial.println("[PMS5003 #2] Attempting recovery...");
+            _pmsActive2 = _pmsSensor2.begin();
+        }
         return false;
     }
     
@@ -318,50 +472,355 @@ bool SensorManager::readPMS2() {
 }
 
 bool SensorManager::readSCD() {
-    if (!_scdActive) return false;
-    return _scdSensor.readMeasurement(_scdData);
+    if (!_scdActive) {
+        // Try to recover
+        static unsigned long lastRecoveryAttempt = 0;
+        unsigned long now = millis();
+        
+        if (now - lastRecoveryAttempt > 30000) {
+            lastRecoveryAttempt = now;
+            Serial.println("[SCD40] Attempting recovery...");
+            recoverMainI2CBus();
+            _scdActive = _scdSensor.begin();
+            if (_scdActive) {
+                _scdActive = _scdSensor.startPeriodicMeasurement();
+                if (_scdActive) {
+                    Serial.println("[SCD40] ✓ Recovery successful");
+                }
+            }
+        }
+        return false;
+    }
+    
+    bool success = _scdSensor.readMeasurement(_scdData);
+    
+    static int failCount = 0;
+    if (!success) {
+        failCount++;
+        if (failCount > 5) {
+            Serial.println("[SCD40] Multiple read failures, marking as inactive");
+            _scdActive = false;
+            failCount = 0;
+        }
+    } else {
+        failCount = 0;
+    }
+    
+    return success;
 }
 
 bool SensorManager::readSFA1() {
-    if (!_sfaActive1) return false;
-    // Uses Wire (main bus) - NO BUS SWITCHING
-    return _sfaSensor1.readMeasurement(_sfaData1);
+    if (!_sfaActive1) {
+        // Try to recover if disconnected
+        static unsigned long lastRecoveryAttempt = 0;
+        unsigned long now = millis();
+        
+        if (now - lastRecoveryAttempt > 30000) {
+            lastRecoveryAttempt = now;
+            Serial.println("[SFA30 #1] Attempting recovery...");
+            recoverMainI2CBus();
+            _sfaActive1 = _sfaSensor1.begin();
+            if (_sfaActive1) {
+                _sfaActive1 = _sfaSensor1.startContinuousMeasurement();
+                if (_sfaActive1) {
+                    Serial.println("[SFA30 #1] ✓ Recovery successful");
+                }
+            }
+        }
+        return false;
+    }
+    
+    bool result = _sfaSensor1.readMeasurement(_sfaData1);
+    
+    // CRITICAL FIX: Check if data is actually valid (not all zeros)
+    if (result && _sfaData1.valid) {
+        // Validate the actual readings
+        bool dataValid = true;
+        
+        // Check for zeros or unreasonable values
+        if (_sfaData1.formaldehyde < 0 || _sfaData1.formaldehyde > 1000) { // ppb range check
+            dataValid = false;
+            Serial.println("[SFA30 #1] Warning: Formaldehyde reading out of range: " + String(_sfaData1.formaldehyde) + " ppb");
+        }
+        
+        if (_sfaData1.temperature < -40 || _sfaData1.temperature > 125) { // SFA30 temperature range
+            dataValid = false;
+            Serial.println("[SFA30 #1] Warning: Temperature reading out of range: " + String(_sfaData1.temperature) + " °C");
+        }
+        
+        if (_sfaData1.humidity < 0 || _sfaData1.humidity > 100) {
+            dataValid = false;
+            Serial.println("[SFA30 #1] Warning: Humidity reading out of range: " + String(_sfaData1.humidity) + " %");
+        }
+        
+        // Special check for all zeros (disconnected sensor)
+        if (_sfaData1.formaldehyde == 0.0 && _sfaData1.temperature == 0.0 && _sfaData1.humidity == 0.0) {
+            dataValid = false;
+            Serial.println("[SFA30 #1] Warning: All readings are zero - sensor may be disconnected");
+        }
+        
+        if (!dataValid) {
+            _sfaData1.valid = false;
+            result = false;
+        }
+    }
+    
+    // If reading fails consistently, try bus recovery
+    static int failCount = 0;
+    if (!result) {
+        failCount++;
+        if (failCount > 3) {
+            Serial.println("[SFA30 #1] Multiple failures, attempting bus recovery...");
+            recoverMainI2CBus();
+            failCount = 0;
+            
+            // Also mark sensor as inactive if too many failures
+            static int totalFailCount = 0;
+            totalFailCount++;
+            if (totalFailCount > 10) {
+                Serial.println("[SFA30 #1] Too many total failures, marking as inactive");
+                _sfaActive1 = false;
+                totalFailCount = 0;
+            }
+        }
+    } else {
+        failCount = 0;
+        static int totalFailCount = 0;
+        totalFailCount = 0; // Reset on success
+    }
+    
+    return result;
 }
 
 bool SensorManager::readSFA2() {
-    if (!_sfaActive2) return false;
-    // Uses _altWire (alternate bus) - NO BUS SWITCHING
-    return _sfaSensor2.readMeasurement(_sfaData2);
+    if (!_sfaActive2) {
+        // Try to recover if disconnected
+        static unsigned long lastRecoveryAttempt = 0;
+        unsigned long now = millis();
+        
+        if (now - lastRecoveryAttempt > 30000) {
+            lastRecoveryAttempt = now;
+            Serial.println("[SFA30 #2] Attempting recovery...");
+            recoverAltI2CBus();
+            _sfaActive2 = _sfaSensor2.begin();
+            if (_sfaActive2) {
+                _sfaActive2 = _sfaSensor2.startContinuousMeasurement();
+                if (_sfaActive2) {
+                    Serial.println("[SFA30 #2] ✓ Recovery successful");
+                }
+            }
+        }
+        return false;
+    }
+    
+    bool result = _sfaSensor2.readMeasurement(_sfaData2);
+    
+    // CRITICAL FIX: Check if data is actually valid (not all zeros)
+    if (result && _sfaData2.valid) {
+        // Validate the actual readings
+        bool dataValid = true;
+        
+        // Check for zeros or unreasonable values
+        if (_sfaData2.formaldehyde < 0 || _sfaData2.formaldehyde > 1000) { // ppb range check
+            dataValid = false;
+            Serial.println("[SFA30 #2] Warning: Formaldehyde reading out of range: " + String(_sfaData2.formaldehyde) + " ppb");
+        }
+        
+        if (_sfaData2.temperature < -40 || _sfaData2.temperature > 125) { // SFA30 temperature range
+            dataValid = false;
+            Serial.println("[SFA30 #2] Warning: Temperature reading out of range: " + String(_sfaData2.temperature) + " °C");
+        }
+        
+        if (_sfaData2.humidity < 0 || _sfaData2.humidity > 100) {
+            dataValid = false;
+            Serial.println("[SFA30 #2] Warning: Humidity reading out of range: " + String(_sfaData2.humidity) + " %");
+        }
+        
+        // Special check for all zeros (disconnected sensor)
+        if (_sfaData2.formaldehyde == 0.0 && _sfaData2.temperature == 0.0 && _sfaData2.humidity == 0.0) {
+            dataValid = false;
+            Serial.println("[SFA30 #2] Warning: All readings are zero - sensor may be disconnected");
+        }
+        
+        if (!dataValid) {
+            _sfaData2.valid = false;
+            result = false;
+        }
+    }
+    
+    // If reading fails consistently, try bus recovery
+    static int failCount = 0;
+    if (!result) {
+        failCount++;
+        if (failCount > 3) {
+            Serial.println("[SFA30 #2] Multiple failures, attempting bus recovery...");
+            recoverAltI2CBus();
+            failCount = 0;
+            
+            // Also mark sensor as inactive if too many failures
+            static int totalFailCount = 0;
+            totalFailCount++;
+            if (totalFailCount > 10) {
+                Serial.println("[SFA30 #2] Too many total failures, marking as inactive");
+                _sfaActive2 = false;
+                totalFailCount = 0;
+            }
+        }
+    } else {
+        failCount = 0;
+        static int totalFailCount = 0;
+        totalFailCount = 0; // Reset on success
+    }
+    
+    return result;
 }
 
 bool SensorManager::readSGP1() {
-    if (!_sgpActive1) return false;
+    if (!_sgpActive1) {
+        // Try to recover
+        static unsigned long lastRecoveryAttempt = 0;
+        unsigned long now = millis();
+        
+        if (now - lastRecoveryAttempt > 30000) {
+            lastRecoveryAttempt = now;
+            Serial.println("[SGP41 #1] Attempting recovery...");
+            recoverMainI2CBus();
+            _sgpActive1 = _sgpSensor1.begin();
+            if (_sgpActive1) {
+                Serial.println("[SGP41 #1] ✓ Recovery successful");
+            }
+        }
+        return false;
+    }
     
     float temp = getAverageTemperature();
     float hum = getAverageHumidity();
     
-    // Uses Wire (main bus) - NO BUS SWITCHING
-    return _sgpSensor1.measureRawSignals(_sgpData1, temp, hum);
+    bool result = _sgpSensor1.measureRawSignals(_sgpData1, temp, hum);
+    
+    // If reading fails consistently, try bus recovery
+    static int failCount = 0;
+    if (!result) {
+        failCount++;
+        if (failCount > 3) {
+            Serial.println("[SGP41 #1] Multiple failures, attempting bus recovery...");
+            recoverMainI2CBus();
+            failCount = 0;
+        }
+    } else {
+        failCount = 0;
+    }
+    
+    return result;
 }
 
 bool SensorManager::readSGP2() {
-    if (!_sgpActive2) return false;
+    if (!_sgpActive2) {
+        // Try to recover
+        static unsigned long lastRecoveryAttempt = 0;
+        unsigned long now = millis();
+        
+        if (now - lastRecoveryAttempt > 30000) {
+            lastRecoveryAttempt = now;
+            Serial.println("[SGP41 #2] Attempting recovery...");
+            recoverAltI2CBus();
+            _sgpActive2 = _sgpSensor2.begin();
+            if (_sgpActive2) {
+                Serial.println("[SGP41 #2] ✓ Recovery successful");
+            }
+        }
+        return false;
+    }
     
     float temp = getAverageTemperature();
     float hum = getAverageHumidity();
     
-    // Uses _altWire (alternate bus) - NO BUS SWITCHING
-    return _sgpSensor2.measureRawSignals(_sgpData2, temp, hum);
+    bool result = _sgpSensor2.measureRawSignals(_sgpData2, temp, hum);
+    
+    // If reading fails consistently, try bus recovery
+    static int failCount = 0;
+    if (!result) {
+        failCount++;
+        if (failCount > 3) {
+            Serial.println("[SGP41 #2] Multiple failures, attempting bus recovery...");
+            recoverAltI2CBus();
+            failCount = 0;
+        }
+    } else {
+        failCount = 0;
+    }
+    
+    return result;
 }
 
 bool SensorManager::readSHT1() {
-    if (!_shtActive1) return false;
-    return _shtSensor1.readMeasurement(_shtData1);
+    if (!_shtActive1) {
+        // Try to recover
+        static unsigned long lastRecoveryAttempt = 0;
+        unsigned long now = millis();
+        
+        if (now - lastRecoveryAttempt > 30000) {
+            lastRecoveryAttempt = now;
+            Serial.println("[SHT31 #1] Attempting recovery...");
+            recoverMainI2CBus();
+            _shtActive1 = _shtSensor1.begin();
+            if (_shtActive1) {
+                Serial.println("[SHT31 #1] ✓ Recovery successful");
+            }
+        }
+        return false;
+    }
+    
+    bool result = _shtSensor1.readMeasurement(_shtData1);
+    
+    static int failCount = 0;
+    if (!result) {
+        failCount++;
+        if (failCount > 5) {
+            Serial.println("[SHT31 #1] Multiple read failures, marking as inactive");
+            _shtActive1 = false;
+            failCount = 0;
+        }
+    } else {
+        failCount = 0;
+    }
+    
+    return result;
 }
 
 bool SensorManager::readSHT2() {
-    if (!_shtActive2) return false;
-    return _shtSensor2.readMeasurement(_shtData2);
+    if (!_shtActive2) {
+        // Try to recover
+        static unsigned long lastRecoveryAttempt = 0;
+        unsigned long now = millis();
+        
+        if (now - lastRecoveryAttempt > 30000) {
+            lastRecoveryAttempt = now;
+            Serial.println("[SHT31 #2] Attempting recovery...");
+            recoverMainI2CBus();
+            _shtActive2 = _shtSensor2.begin();
+            if (_shtActive2) {
+                Serial.println("[SHT31 #2] ✓ Recovery successful");
+            }
+        }
+        return false;
+    }
+    
+    bool result = _shtSensor2.readMeasurement(_shtData2);
+    
+    static int failCount = 0;
+    if (!result) {
+        failCount++;
+        if (failCount > 5) {
+            Serial.println("[SHT31 #2] Multiple read failures, marking as inactive");
+            _shtActive2 = false;
+            failCount = 0;
+        }
+    } else {
+        failCount = 0;
+    }
+    
+    return result;
 }
 
 void SensorManager::manageHeaters() {

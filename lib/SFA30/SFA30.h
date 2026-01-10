@@ -10,7 +10,6 @@ namespace SFA30 {
         float humidity;      // %RH
         float temperature;   // °C
         bool valid;
-        int errorCount;
     };
 
     class Sensor {
@@ -24,6 +23,7 @@ namespace SFA30 {
         bool getDeviceMarking(char* deviceMarking, size_t size);
         bool reset();
         bool isInitialized() const { return _initialized; }
+        bool isMeasurementStarted() const { return _measurementStarted; }
         
     private:
         SensirionI2cSfa3x _sfa;
@@ -31,5 +31,6 @@ namespace SFA30 {
         uint8_t _address;
         bool _initialized;
         bool _measurementStarted;
+        int _errorCount = 0;
     };
 }

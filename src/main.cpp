@@ -214,6 +214,12 @@ void printSFAData(const SFA30::Data& data, int sensorNum) {
         return;
     }
     
+    // ADD THIS CHECK: Don't display zeros
+    if (data.formaldehyde == 0.0 && data.temperature == 0.0 && data.humidity == 0.0) {
+        Serial.printf("[SFA30 #%d] Sensor disconnected or invalid data\n", sensorNum);
+        return;
+    }
+    
     String quality = getHCHOQuality(data.formaldehyde);
     
     Serial.printf("┌────────────── HCHO SENSOR #%d ─────────────┐\n", sensorNum);
