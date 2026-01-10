@@ -24,6 +24,9 @@ SensorManager::SensorManager(const I2CConfig& i2cConfig, const PMSConfig& pmsCon
 bool SensorManager::begin() {
     Serial.println("\n[SensorManager] Initializing...");
     
+    // First, recover I2C bus in case it's stuck
+    _recoverI2CBus();
+    
     // Initialize main I2C bus
     Serial.printf("  Main I2C: SDA=%d, SCL=%d\n", _i2cConfig.mainSDA, _i2cConfig.mainSCL);
     Wire.begin(_i2cConfig.mainSDA, _i2cConfig.mainSCL);
@@ -36,12 +39,67 @@ bool SensorManager::begin() {
     delay(100);
     _pmsActive2 = _pmsSensor2.begin();
     
-    // Initialize SDP810
+    // ========== UPDATED SDP810 INITIALIZATION ==========
     Serial.println("\n[SDP810] Initializing...");
-    _sdpActive = _sdpSensor.begin();
-    if (_sdpActive) {
-        _sdpActive = _sdpSensor.startContinuousMeasurement();
+    
+    // Try multiple times to initialize SDP810
+    bool sdpInitialized = false;
+    for (int attempt = 1; attempt <= 3; attempt++) {
+        Serial.printf("  Attempt %d/3: ", attempt);
+        
+        // Send soft reset
+        if (_sdpSensor.softReset()) {
+            Serial.print("Reset OK, ");
+            delay(5);
+        } else {
+            Serial.print("Reset failed, ");
+        }
+        
+        // Try to detect sensor
+        if (_sdpSensor.begin()) {
+            Serial.print("Sensor detected, ");
+            
+            // Try to start measurement with retry
+            bool measurementStarted = false;
+            for (int measAttempt = 1; measAttempt <= 2; measAttempt++) {
+                if (_sdpSensor.startContinuousMeasurement()) {
+                    measurementStarted = true;
+                    Serial.print("Measurement started");
+                    
+                    // Test read to verify
+                    SDP810::Data testData;
+                    if (_sdpSensor.readMeasurement(testData)) {
+                        Serial.printf(" ✓ (P=%+7.2f Pa, T=%6.2f°C)", 
+                                    testData.differential_pressure, testData.temperature);
+                    } else {
+                        Serial.print(" (Test read failed)");
+                    }
+                    break;
+                } else if (measAttempt < 2) {
+                    Serial.print("Start failed, retrying... ");
+                    delay(50);
+                }
+            }
+            
+            if (measurementStarted) {
+                sdpInitialized = true;
+                _sdpActive = true;
+                break;
+            } else {
+                Serial.println();
+            }
+        } else {
+            Serial.println("Sensor not detected");
+        }
+        
+        delay(100);
     }
+    
+    if (!sdpInitialized) {
+        Serial.println("  ✗ SDP810 initialization failed after 3 attempts");
+        _sdpActive = false;
+    }
+    // ========== END SDP810 INITIALIZATION ==========
     
     // Initialize SCD40
     Serial.println("\n[SCD40] Initializing...");
@@ -49,6 +107,9 @@ bool SensorManager::begin() {
     if (_scdActive) {
         _scdActive = _scdSensor.startPeriodicMeasurement();
         _scdSensor.setAutomaticSelfCalibration(true);
+        Serial.println("  ✓ SCD40 initialized");
+    } else {
+        Serial.println("  ✗ SCD40 not detected");
     }
     
     // Initialize SHT31 sensors
@@ -56,14 +117,28 @@ bool SensorManager::begin() {
     _shtActive1 = _shtSensor1.begin();
     _shtActive2 = _shtSensor2.begin();
     
-    if (_shtActive1) _shtSensor1.enableHeater(false);
-    if (_shtActive2) _shtSensor2.enableHeater(false);
+    if (_shtActive1) {
+        _shtSensor1.enableHeater(false);
+        Serial.println("  ✓ SHT31 #1 initialized");
+    } else {
+        Serial.println("  ✗ SHT31 #1 not detected");
+    }
+    
+    if (_shtActive2) {
+        _shtSensor2.enableHeater(false);
+        Serial.println("  ✓ SHT31 #2 initialized");
+    } else {
+        Serial.println("  ✗ SHT31 #2 not detected");
+    }
     
     // Initialize SFA30 sensors
     Serial.println("\n[SFA30 #1] Initializing on main bus...");
     _sfaActive1 = _sfaSensor1.begin();
     if (_sfaActive1) {
         _sfaActive1 = _sfaSensor1.startContinuousMeasurement();
+        Serial.println("  ✓ SFA30 #1 initialized");
+    } else {
+        Serial.println("  ✗ SFA30 #1 not detected");
     }
     
     // Initialize SFA30 #2 on alternate pins
@@ -72,6 +147,9 @@ bool SensorManager::begin() {
     _sfaActive2 = _sfaSensor2.begin();
     if (_sfaActive2) {
         _sfaActive2 = _sfaSensor2.startContinuousMeasurement();
+        Serial.println("  ✓ SFA30 #2 initialized");
+    } else {
+        Serial.println("  ✗ SFA30 #2 not detected");
     }
     _switchToMainBus();
     
@@ -80,14 +158,80 @@ bool SensorManager::begin() {
     _sgpActive1 = _sgpSensor1.begin();
     _sgpActive2 = _sgpSensor2.begin();
     
+    if (_sgpActive1) {
+        Serial.println("  ✓ SGP41 #1 initialized");
+    } else {
+        Serial.println("  ✗ SGP41 #1 not detected");
+    }
+    
+    if (_sgpActive2) {
+        Serial.println("  ✓ SGP41 #2 initialized");
+    } else {
+        Serial.println("  ✗ SGP41 #2 not detected");
+    }
+    
+    // Print summary
     Serial.println("\n[SensorManager] Initialization complete!");
+    Serial.println("=== SENSOR STATUS ===");
+    Serial.printf("  PMS5003 #1: %s\n", _pmsActive1 ? "OK" : "FAIL");
+    Serial.printf("  PMS5003 #2: %s\n", _pmsActive2 ? "OK" : "FAIL");
+    Serial.printf("  SDP810:     %s\n", _sdpActive ? "OK" : "FAIL");
+    Serial.printf("  SCD40:      %s\n", _scdActive ? "OK" : "FAIL");
+    Serial.printf("  SFA30 #1:   %s\n", _sfaActive1 ? "OK" : "FAIL");
+    Serial.printf("  SFA30 #2:   %s\n", _sfaActive2 ? "OK" : "FAIL");
+    Serial.printf("  SGP41 #1:   %s\n", _sgpActive1 ? "OK" : "FAIL");
+    Serial.printf("  SGP41 #2:   %s\n", _sgpActive2 ? "OK" : "FAIL");
+    Serial.printf("  SHT31 #1:   %s\n", _shtActive1 ? "OK" : "FAIL");
+    Serial.printf("  SHT31 #2:   %s\n", _shtActive2 ? "OK" : "FAIL");
+    Serial.println("======================");
+    
     return true;
+}
+
+void SensorManager::_recoverI2CBus() {
+    Serial.println("[I2C Recovery] Attempting bus recovery...");
+    
+    pinMode(_i2cConfig.mainSDA, INPUT_PULLUP);
+    pinMode(_i2cConfig.mainSCL, INPUT_PULLUP);
+    delay(100);
+    
+    if (digitalRead(_i2cConfig.mainSDA) == LOW || digitalRead(_i2cConfig.mainSCL) == LOW) {
+        Serial.println("  I2C bus appears stuck. Attempting clock recovery...");
+        
+        pinMode(_i2cConfig.mainSDA, OUTPUT);
+        digitalWrite(_i2cConfig.mainSDA, HIGH);
+        pinMode(_i2cConfig.mainSCL, OUTPUT);
+        
+        for (int i = 0; i < 10; i++) {
+            digitalWrite(_i2cConfig.mainSCL, LOW);
+            delayMicroseconds(5);
+            digitalWrite(_i2cConfig.mainSCL, HIGH);
+            delayMicroseconds(5);
+        }
+        
+        digitalWrite(_i2cConfig.mainSDA, LOW);
+        delayMicroseconds(5);
+        digitalWrite(_i2cConfig.mainSCL, HIGH);
+        delayMicroseconds(5);
+        digitalWrite(_i2cConfig.mainSDA, HIGH);
+        delayMicroseconds(5);
+        
+        pinMode(_i2cConfig.mainSDA, INPUT_PULLUP);
+        pinMode(_i2cConfig.mainSCL, INPUT_PULLUP);
+        
+        Serial.println("  Clock recovery complete");
+    } else {
+        Serial.println("  I2C bus appears free");
+    }
+    
+    delay(50);
 }
 
 void SensorManager::_switchToMainBus() {
     Wire.end();
     delay(5);
     Wire.begin(_i2cConfig.mainSDA, _i2cConfig.mainSCL);
+    Wire.setClock(100000);
     delay(5);
 }
 
@@ -95,9 +239,39 @@ void SensorManager::_switchToAltBus() {
     Wire.end();
     delay(5);
     Wire.begin(_i2cConfig.altSDA, _i2cConfig.altSCL);
+    Wire.setClock(100000);
     delay(5);
 }
 
+bool SensorManager::readSDP() {
+    if (!_sdpActive) return false;
+    
+    bool success = _sdpSensor.readMeasurement(_sdpData);
+    
+    // If reading fails, try to recover
+    if (!success && _sdpActive) {
+        Serial.println("[SDP810] Read failed, attempting recovery...");
+        
+        _sdpSensor.stopContinuousMeasurement();
+        delay(50);
+        _sdpActive = _sdpSensor.startContinuousMeasurement();
+        delay(50);
+        
+        if (_sdpActive) {
+            success = _sdpSensor.readMeasurement(_sdpData);
+            if (success) {
+                Serial.println("[SDP810] ✓ Recovery successful");
+            } else {
+                Serial.println("[SDP810] ✗ Recovery failed");
+                _sdpActive = false;
+            }
+        }
+    }
+    
+    return success;
+}
+
+// The rest of the functions remain the same as before...
 bool SensorManager::readPMS1() {
     if (!_pmsActive1) {
         _pmsData1.valid = false;
@@ -108,19 +282,13 @@ bool SensorManager::readPMS1() {
     bool success = _pmsSensor1.readDataNonBlocking(newData);
     
     if (success) {
-        // New data received successfully
         _pmsData1 = newData;
         return true;
     } else {
-        // No new data received
-        // Check if existing data is still fresh
         if (!_pmsSensor1.isDataFresh(PMS_DATA_TIMEOUT)) {
-            // Data is stale - invalidate it
             _pmsData1.valid = false;
             
-            // Optional: Check if sensor has stopped responding completely
             if (_pmsSensor1.getTimeSinceLastRead() > PMS_DISCONNECTION_TIMEOUT) {
-                // Sensor appears to be disconnected
                 Serial.println("[PMS5003 #1] ⚠ Sensor not responding - may be disconnected!");
             }
         }
@@ -138,29 +306,18 @@ bool SensorManager::readPMS2() {
     bool success = _pmsSensor2.readDataNonBlocking(newData);
     
     if (success) {
-        // New data received successfully
         _pmsData2 = newData;
         return true;
     } else {
-        // No new data received
-        // Check if existing data is still fresh
         if (!_pmsSensor2.isDataFresh(PMS_DATA_TIMEOUT)) {
-            // Data is stale - invalidate it
             _pmsData2.valid = false;
             
-            // Optional: Check if sensor has stopped responding completely
             if (_pmsSensor2.getTimeSinceLastRead() > PMS_DISCONNECTION_TIMEOUT) {
-                // Sensor appears to be disconnected
                 Serial.println("[PMS5003 #2] ⚠ Sensor not responding - may be disconnected!");
             }
         }
         return false;
     }
-}
-
-bool SensorManager::readSDP() {
-    if (!_sdpActive) return false;
-    return _sdpSensor.readMeasurement(_sdpData);
 }
 
 bool SensorManager::readSCD() {
@@ -176,7 +333,6 @@ bool SensorManager::readSFA1() {
 bool SensorManager::readSFA2() {
     if (!_sfaActive2) return false;
     
-    // Switch to alternate bus for SFA30 #2
     _switchToAltBus();
     bool result = _sfaSensor2.readMeasurement(_sfaData2);
     _switchToMainBus();
@@ -187,7 +343,6 @@ bool SensorManager::readSFA2() {
 bool SensorManager::readSGP1() {
     if (!_sgpActive1) return false;
     
-    // Get compensation values from SHT31 sensors
     float temp = getAverageTemperature();
     float hum = getAverageHumidity();
     
@@ -197,7 +352,6 @@ bool SensorManager::readSGP1() {
 bool SensorManager::readSGP2() {
     if (!_sgpActive2) return false;
     
-    // Get compensation values from SHT31 sensors
     float temp = getAverageTemperature();
     float hum = getAverageHumidity();
     
@@ -221,7 +375,6 @@ void SensorManager::manageHeaters() {
         _lastHeaterToggle1 = now;
         _shtHeaterEnabled1 = !_shtHeaterEnabled1;
         _shtSensor1.enableHeater(_shtHeaterEnabled1);
-        // Force read heater status immediately
         _shtData1.heaterEnabled = _shtHeaterEnabled1;
         Serial.printf("[SHT31 #1] Heater %s\n", _shtHeaterEnabled1 ? "ON" : "OFF");
     }
@@ -230,13 +383,11 @@ void SensorManager::manageHeaters() {
         _lastHeaterToggle2 = now;
         _shtHeaterEnabled2 = !_shtHeaterEnabled2;
         _shtSensor2.enableHeater(_shtHeaterEnabled2);
-        // Force read heater status immediately
         _shtData2.heaterEnabled = _shtHeaterEnabled2;
         Serial.printf("[SHT31 #2] Heater %s\n", _shtHeaterEnabled2 ? "ON" : "OFF");
     }
 }
 
-// NEW: PMS sensor health checking methods
 bool SensorManager::isPMS1Responding() const {
     return _pmsActive1 && _pmsSensor1.isSensorResponding();
 }

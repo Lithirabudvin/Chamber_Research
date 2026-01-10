@@ -86,6 +86,7 @@ private:
     // I2C bus management
     void _switchToMainBus();
     void _switchToAltBus();
+    void _recoverI2CBus();  // ADD THIS LINE
     
     // Configurations
     I2CConfig _i2cConfig;

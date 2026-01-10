@@ -1,5 +1,5 @@
 #include "SDP810.h"
-#include <math.h>  // Add this for sqrt and abs functions
+#include <math.h>
 
 namespace SDP810 {
 
@@ -7,19 +7,55 @@ namespace SDP810 {
         : _wire(wire), _address(address), _continuousMode(false) {
     }
 
-    bool Sensor::begin() {
+    // FIXED: Correct soft reset using general call address 0x00
+    bool Sensor::softReset() {
+        // 1. First try to stop measurement if it's running
+        if (_continuousMode) {
+            stopContinuousMeasurement();
+            delay(1);
+        }
+        
+        // 2. Send soft reset using GENERAL CALL address (0x00)
+        // According to datasheet page 8, section 6.3.4
+        _wire.beginTransmission(0x00);  // GENERAL CALL ADDRESS, not sensor address!
+        _wire.write(0x06);              // Soft reset command (8-bit)
+        uint8_t error = _wire.endTransmission();
+        
+        _continuousMode = false;
+        
+        // 3. Wait for reset to complete (datasheet says max 2ms, page 3)
+        delay(3);  // Slightly longer than max 2ms for safety
+        
+        // 4. Try to communicate with sensor to verify it's alive
+        // Wait up to 50ms for sensor to recover
+        for (int i = 0; i < 5; i++) {
+            if (_tryCommunication()) {
+                // Sensor responded!
+                delay(5);  // Small additional delay
+                return true;
+            }
+            delay(10);  // Wait 10ms before retry
+        }
+        
+        return error == 0;
+    }
+
+    // Helper function to test communication
+    bool Sensor::_tryCommunication() {
         _wire.beginTransmission(_address);
         return _wire.endTransmission() == 0;
     }
 
-    // ADD THIS SIMPLE READ FUNCTION
+    bool Sensor::begin() {
+        return _tryCommunication();
+    }
+
     bool Sensor::readSimple(float& pressure, float& temperature) {
-        // Start continuous measurement if not already started
         if (!_continuousMode) {
             if (!startContinuousMeasurement()) {
                 return false;
             }
-            delay(10); // Small delay after starting
+            delay(10);
         }
         
         Data data;
@@ -32,6 +68,7 @@ namespace SDP810 {
         return true;
     }
 
+    // UPDATED: Added proper delay after starting measurement
     bool Sensor::startContinuousMeasurement(MeasurementMode mode) {
         _wire.beginTransmission(_address);
         _wire.write((mode >> 8) & 0xFF);
@@ -39,7 +76,10 @@ namespace SDP810 {
         if (_wire.endTransmission() != 0) return false;
         
         _continuousMode = true;
-        delay(10);  // Allow sensor to start measurements
+        
+        // CRITICAL: Wait for first measurement (datasheet says 8ms, page 7)
+        delay(10);  // Wait 10ms for first measurement to be ready
+        
         return true;
     }
 
@@ -61,9 +101,8 @@ namespace SDP810 {
             return false;
         }
         
-        // Convert raw values to engineering units
-        data.differential_pressure = diff_pressure_raw / 60.0f;  // Scale factor from datasheet
-        data.temperature = temperature_raw / 200.0f;            // Scale factor from datasheet
+        data.differential_pressure = diff_pressure_raw / 60.0f;
+        data.temperature = temperature_raw / 200.0f;
         data.air_flow = _calculateAirFlow(data.differential_pressure);
         data.air_velocity = _calculateAirVelocity(data.differential_pressure);
         data.valid = true;
@@ -81,10 +120,7 @@ namespace SDP810 {
             data[i] = _wire.read();
         }
         
-        // Check CRC for differential pressure
         if (_crc8(&data[0], 2) != data[2]) return false;
-        
-        // Check CRC for temperature
         if (_crc8(&data[3], 2) != data[5]) return false;
         
         differential_pressure_raw = (data[0] << 8) | data[1];
@@ -94,10 +130,8 @@ namespace SDP810 {
     }
 
     float Sensor::_calculateAirFlow(float differential_pressure) {
-        // Simplified calculation - adjust based on your duct size
-        // Flow = velocity * area, with velocity calculated from pressure
-        const float density = 1.225f;  // Air density kg/m³
-        const float area = 0.001f;     // Duct cross-sectional area m²
+        const float density = 1.225f;
+        const float area = 0.001f;
         
         if (differential_pressure >= 0) {
             return sqrt((2 * fabs(differential_pressure)) / density) * area;
@@ -106,7 +140,7 @@ namespace SDP810 {
     }
 
     float Sensor::_calculateAirVelocity(float differential_pressure) {
-        const float density = 1.225f;  // Air density kg/m³
+        const float density = 1.225f;
         
         if (differential_pressure >= 0) {
             return sqrt((2 * fabs(differential_pressure)) / density);
