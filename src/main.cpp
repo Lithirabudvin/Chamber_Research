@@ -13,7 +13,7 @@ bool sdp810Verified = false;
 // Global objects
 SensorManager::I2CConfig i2cConfig;
 SensorManager::PMSConfig pmsConfig;
-SensorManager sensorManager(i2cConfig, pmsConfig);
+SensorManager* sensorManager = nullptr;  // Changed to pointer
 
 // ThingsBoard Client Configuration
 ThingsBoardConfig tbConfig;
@@ -114,29 +114,31 @@ float calculateAbsoluteHumidity(float temp, float humidity) {
 
 // Display functions
 void printSensorStatus() {
+    if (!sensorManager) return;
+    
     Serial.println("\n════════════════════════════════════════");
     Serial.println("          SENSOR STATUS");
     Serial.println("════════════════════════════════════════");
-    Serial.printf("  PMS5003 #1: %s\n", sensorManager.isPMS1Active() ? "✓ ACTIVE" : "✗ INACTIVE");
-    Serial.printf("  PMS5003 #2: %s\n", sensorManager.isPMS2Active() ? "✓ ACTIVE" : "✗ INACTIVE");
-    Serial.printf("  SDP810:     %s\n", sensorManager.isSDPActive() ? "✓ ACTIVE" : "✗ INACTIVE");
-    Serial.printf("  SCD40:      %s\n", sensorManager.isSCDActive() ? "✓ ACTIVE" : "✗ INACTIVE");
-    Serial.printf("  SFA30 #1:   %s\n", sensorManager.isSFA1Active() ? "✓ ACTIVE" : "✗ INACTIVE");
-    Serial.printf("  SFA30 #2:   %s\n", sensorManager.isSFA2Active() ? "✓ ACTIVE" : "✗ INACTIVE");
-    Serial.printf("  SGP41 #1:   %s", sensorManager.isSGP1Active() ? "✓ ACTIVE" : "✗ INACTIVE");
-    if (sensorManager.isSGP1Active() && sensorManager.getSGP1Data().conditioning) 
+    Serial.printf("  PMS5003 #1: %s\n", sensorManager->isPMS1Active() ? "✓ ACTIVE" : "✗ INACTIVE");
+    Serial.printf("  PMS5003 #2: %s\n", sensorManager->isPMS2Active() ? "✓ ACTIVE" : "✗ INACTIVE");
+    Serial.printf("  SDP810:     %s\n", sensorManager->isSDPActive() ? "✓ ACTIVE" : "✗ INACTIVE");
+    Serial.printf("  SCD40:      %s\n", sensorManager->isSCDActive() ? "✓ ACTIVE" : "✗ INACTIVE");
+    Serial.printf("  SFA30 #1:   %s\n", sensorManager->isSFA1Active() ? "✓ ACTIVE" : "✗ INACTIVE");
+    Serial.printf("  SFA30 #2:   %s\n", sensorManager->isSFA2Active() ? "✓ ACTIVE" : "✗ INACTIVE");
+    Serial.printf("  SGP41 #1:   %s", sensorManager->isSGP1Active() ? "✓ ACTIVE" : "✗ INACTIVE");
+    if (sensorManager->isSGP1Active() && sensorManager->getSGP1Data().conditioning) 
         Serial.print(" [CONDITIONING]");
     Serial.println();
-    Serial.printf("  SGP41 #2:   %s", sensorManager.isSGP2Active() ? "✓ ACTIVE" : "✗ INACTIVE");
-    if (sensorManager.isSGP2Active() && sensorManager.getSGP2Data().conditioning) 
+    Serial.printf("  SGP41 #2:   %s", sensorManager->isSGP2Active() ? "✓ ACTIVE" : "✗ INACTIVE");
+    if (sensorManager->isSGP2Active() && sensorManager->getSGP2Data().conditioning) 
         Serial.print(" [CONDITIONING]");
     Serial.println();
-    Serial.printf("  SHT31 #1:   %s", sensorManager.isSHT1Active() ? "✓ ACTIVE" : "✗ INACTIVE");
-    if (sensorManager.isSHT1Active() && sensorManager.getSHT1Data().heaterEnabled) 
+    Serial.printf("  SHT31 #1:   %s", sensorManager->isSHT1Active() ? "✓ ACTIVE" : "✗ INACTIVE");
+    if (sensorManager->isSHT1Active() && sensorManager->getSHT1Data().heaterEnabled) 
         Serial.print(" [HEATER ON]");
     Serial.println();
-    Serial.printf("  SHT31 #2:   %s", sensorManager.isSHT2Active() ? "✓ ACTIVE" : "✗ INACTIVE");
-    if (sensorManager.isSHT2Active() && sensorManager.getSHT2Data().heaterEnabled) 
+    Serial.printf("  SHT31 #2:   %s", sensorManager->isSHT2Active() ? "✓ ACTIVE" : "✗ INACTIVE");
+    if (sensorManager->isSHT2Active() && sensorManager->getSHT2Data().heaterEnabled) 
         Serial.print(" [HEATER ON]");
     Serial.println();
     Serial.println("════════════════════════════════════════\n");
@@ -286,12 +288,14 @@ void printSHTData(const SHT31::Data& data, int sensorNum) {
 
 // ADD THIS FUNCTION TO VERIFY SDP810
 void verifySDP810() {
+    if (!sensorManager) return;
+    
     Serial.println("\n╔════════════════════════════════════════╗");
     Serial.println("║        VERIFYING SDP810 SENSOR        ║");
     Serial.println("╚════════════════════════════════════════╝\n");
     
     // Use the SDP810 sensor from sensorManager
-    if (sensorManager.isSDPActive()) {
+    if (sensorManager->isSDPActive()) {
         Serial.println("[SDP810] Sensor detected at address 0x25");
         
         // Try to read 5 times to verify
@@ -300,8 +304,8 @@ void verifySDP810() {
         float avgTemp = 0;
         
         for (int i = 0; i < 5; i++) {
-            if (sensorManager.readSDP()) {
-                const SDP810::Data& data = sensorManager.getSDPData();
+            if (sensorManager->readSDP()) {
+                const SDP810::Data& data = sensorManager->getSDPData();
                 if (data.valid) {
                     successfulReads++;
                     avgPressure += data.differential_pressure;
@@ -353,15 +357,35 @@ void setup() {
     Serial.println("    with ThingsBoard Gateway MQTT");
     Serial.println("    and SDP810 Air Flow Sensor");
     Serial.println("════════════════════════════════════════");
-    Serial.println("  Version: 2.0 (Real-time)");
+    Serial.println("  Version: 2.1 (Dual SGP41 Support)");
     Serial.println("  ThingsBoard Server: cloud.thingsnode.cc");
     Serial.println("  Gateway Token: " + String(GATEWAY_TOKEN));
     Serial.println("  WiFi: " + String(WIFI_SSID));
     Serial.println("════════════════════════════════════════\n");
     
-    // Initialize sensor manager first
-    Serial.println("\n[System] Initializing 12 sensors...");
-    if (!sensorManager.begin()) {
+    // Configure I2C pins for all sensors
+    i2cConfig.mainSDA = 21;
+    i2cConfig.mainSCL = 22;
+    i2cConfig.altSDA = 25;
+    i2cConfig.altSCL = 26;
+    i2cConfig.sgp2SDA = 32;   // For second SGP41
+    i2cConfig.sgp2SCL = 33;   // For second SGP41
+    
+    // PMS config
+    pmsConfig.rxPin1 = 16;
+    pmsConfig.txPin1 = 17;
+    pmsConfig.rxPin2 = 18;
+    pmsConfig.txPin2 = 19;
+    
+    // Create sensor manager with new config
+    sensorManager = new SensorManager(i2cConfig, pmsConfig);
+    
+    // Initialize sensor manager
+    Serial.println("\n[System] Initializing 12 sensors with dual SGP41 support...");
+    Serial.println("  SGP41 #1: Main bus (SDA=21, SCL=22)");
+    Serial.println("  SGP41 #2: Separate bus (SDA=32, SCL=33)");
+    
+    if (!sensorManager->begin()) {
         Serial.println("[ERROR] Failed to initialize sensors!");
         while (1) {
             Serial.println("System halted. Please check connections and restart.");
@@ -431,6 +455,8 @@ void setup() {
     } else {
         Serial.println("  SDP810: ⚠ NOT VERIFIED / DISABLED");
     }
+    Serial.println("  SGP41 #1: Main bus (21/22)");
+    Serial.println("  SGP41 #2: Separate bus (32/33)");
     Serial.println("Local display interval:   5 seconds");
     Serial.println("Cloud upload interval:    5 seconds (REAL-TIME)");
     Serial.println("Total sensors:           12");
@@ -447,6 +473,8 @@ void loop() {
     static unsigned long lastReadTime = 0;
     static unsigned long lastSDP810SimpleRead = 0;
     
+    if (!sensorManager) return;
+    
     unsigned long now = millis();
     
     // CRITICAL: Call MQTT loop frequently for real-time operation
@@ -459,19 +487,19 @@ void loop() {
         lastReadTime = now;
         
         // Read all sensors
-        sensorManager.readPMS1();
-        sensorManager.readPMS2();
+        sensorManager->readPMS1();
+        sensorManager->readPMS2();
         
         // Read SDP810 (only if verified)
-        if (sensorManager.isSDPActive() && sdp810Verified) {
-            sdpOk = sensorManager.readSDP();
+        if (sensorManager->isSDPActive() && sdp810Verified) {
+            sdpOk = sensorManager->readSDP();
             
             // Optional: Add simple verification during operation
             if (now - lastSDP810SimpleRead >= 30000) { // Every 30 seconds
                 lastSDP810SimpleRead = now;
                 
                 if (sdpOk) {
-                    const SDP810::Data& data = sensorManager.getSDPData();
+                    const SDP810::Data& data = sensorManager->getSDPData();
                     Serial.printf("[SDP810 Check] Pressure: %+7.2f Pa, Temp: %6.2f°C\n",
                                  data.differential_pressure, data.temperature);
                     
@@ -484,16 +512,16 @@ void loop() {
         }
         
         // Read other I2C sensors
-        sensorManager.readSCD();
-        sensorManager.readSFA1();
-        sensorManager.readSFA2();
-        sensorManager.readSGP1();
-        sensorManager.readSGP2();
-        sensorManager.readSHT1();
-        sensorManager.readSHT2();
+        sensorManager->readSCD();
+        sensorManager->readSFA1();
+        sensorManager->readSFA2();
+        sensorManager->readSGP1();  // Now on separate bus
+        sensorManager->readSGP2();  // Now on separate bus
+        sensorManager->readSHT1();
+        sensorManager->readSHT2();
         
         // Manage SHT31 heaters
-        sensorManager.manageHeaters();
+        sensorManager->manageHeaters();
         
         // CRITICAL: Call MQTT loop after sensor reading
         if (thingsBoard) {
@@ -504,7 +532,7 @@ void loop() {
     // Send data to ThingsBoard via MQTT Gateway (now every 5 seconds)
     if (thingsBoard && thingsBoard->isSendDue()) {
         Serial.println("\n[Cloud] Uploading real-time data via MQTT Gateway...");
-        if (thingsBoard->sendSensorData(sensorManager)) {
+        if (thingsBoard->sendSensorData(*sensorManager)) {
             Serial.println("[Cloud] ✓ Data successfully uploaded via MQTT");
             
             // Show timestamp info
@@ -532,17 +560,23 @@ void loop() {
         Serial.printf("  Uptime: %.1f minutes\n", now / 60000.0);
         Serial.printf("  Free Heap: %d bytes\n", ESP.getFreeHeap());
         Serial.printf("  Compensation: %.1f°C, %.1f%% RH\n", 
-                     sensorManager.getAverageTemperature(), 
-                     sensorManager.getAverageHumidity());
+                     sensorManager->getAverageTemperature(), 
+                     sensorManager->getAverageHumidity());
         
         // ADD SDP810 STATUS
         if (sdp810Verified) {
             Serial.println("  SDP810: ✓ Verified and active");
-        } else if (sensorManager.isSDPActive()) {
+        } else if (sensorManager->isSDPActive()) {
             Serial.println("  SDP810: ⚠ Active but not verified");
         } else {
             Serial.println("  SDP810: ✗ Not detected");
         }
+        
+        // Show SGP41 bus status
+        Serial.printf("  SGP41 #1: %s (Main bus 21/22)\n", 
+                     sensorManager->isSGP1Active() ? "Active" : "Inactive");
+        Serial.printf("  SGP41 #2: %s (Separate bus 32/33)\n", 
+                     sensorManager->isSGP2Active() ? "Active" : "Inactive");
         
         // Show WiFi and MQTT status
         if (thingsBoard) {
@@ -571,51 +605,51 @@ void loop() {
         Serial.println("════════════════════════════════════════\n");
         
         // Display PMS5003 data
-        if (sensorManager.isPMS1Active() && sensorManager.getPMS1Data().valid)
-            printPMSData(sensorManager.getPMS1Data(), 1);
-        if (sensorManager.isPMS2Active() && sensorManager.getPMS2Data().valid)
-            printPMSData(sensorManager.getPMS2Data(), 2);
+        if (sensorManager->isPMS1Active() && sensorManager->getPMS1Data().valid)
+            printPMSData(sensorManager->getPMS1Data(), 1);
+        if (sensorManager->isPMS2Active() && sensorManager->getPMS2Data().valid)
+            printPMSData(sensorManager->getPMS2Data(), 2);
         
         Serial.println();
         
         // Display SDP810 data
         if (sdpOk) {
-            printSDPData(sensorManager.getSDPData());
+            printSDPData(sensorManager->getSDPData());
             sdpOk = false;
-        } else if (sensorManager.isSDPActive() && sdp810Verified) {
+        } else if (sensorManager->isSDPActive() && sdp810Verified) {
             Serial.println("[SDP810] No new data");
         }
         
         Serial.println();
         
         // Display SCD40 data
-        if (sensorManager.isSCDActive()) {
-            printSCDData(sensorManager.getSCDData());
+        if (sensorManager->isSCDActive()) {
+            printSCDData(sensorManager->getSCDData());
         }
         
         Serial.println();
         
         // Display SFA30 data
-        if (sensorManager.isSFA1Active() && sensorManager.getSFA1Data().valid)
-            printSFAData(sensorManager.getSFA1Data(), 1);
-        if (sensorManager.isSFA2Active() && sensorManager.getSFA2Data().valid)
-            printSFAData(sensorManager.getSFA2Data(), 2);
+        if (sensorManager->isSFA1Active() && sensorManager->getSFA1Data().valid)
+            printSFAData(sensorManager->getSFA1Data(), 1);
+        if (sensorManager->isSFA2Active() && sensorManager->getSFA2Data().valid)
+            printSFAData(sensorManager->getSFA2Data(), 2);
         
         Serial.println();
         
-        // Display SGP41 data
-        if (sensorManager.isSGP1Active())
-            printSGPData(sensorManager.getSGP1Data(), 1);
-        if (sensorManager.isSGP2Active())
-            printSGPData(sensorManager.getSGP2Data(), 2);
+        // Display SGP41 data (BOTH will now work independently)
+        if (sensorManager->isSGP1Active())
+            printSGPData(sensorManager->getSGP1Data(), 1);
+        if (sensorManager->isSGP2Active())
+            printSGPData(sensorManager->getSGP2Data(), 2);
         
         Serial.println();
         
         // Display SHT31 data
-        if (sensorManager.isSHT1Active() && sensorManager.getSHT1Data().valid)
-            printSHTData(sensorManager.getSHT1Data(), 1);
-        if (sensorManager.isSHT2Active() && sensorManager.getSHT2Data().valid)
-            printSHTData(sensorManager.getSHT2Data(), 2);
+        if (sensorManager->isSHT1Active() && sensorManager->getSHT1Data().valid)
+            printSHTData(sensorManager->getSHT1Data(), 1);
+        if (sensorManager->isSHT2Active() && sensorManager->getSHT2Data().valid)
+            printSHTData(sensorManager->getSHT2Data(), 2);
         
         Serial.println("\n──────────────────────────────────────");
         Serial.printf("Next local update in: %.1f seconds\n", DISPLAY_INTERVAL / 1000.0);

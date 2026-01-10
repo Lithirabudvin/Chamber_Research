@@ -17,6 +17,8 @@ public:
         int mainSCL = 22;
         int altSDA = 25;
         int altSCL = 26;
+        int sgp2SDA = 32;   // ADDED: For second SGP41
+        int sgp2SCL = 33;   // ADDED: For second SGP41
     };
     
     // PMS5003 Configuration
@@ -72,7 +74,7 @@ public:
     bool isSHT1Active() const { return _shtActive1; }
     bool isSHT2Active() const { return _shtActive2; }
     
-    // NEW: PMS sensor health checking
+    // PMS sensor health checking
     bool isPMS1Responding() const;
     bool isPMS2Responding() const;
     unsigned long getPMS1TimeSinceLastRead() const;
@@ -86,7 +88,8 @@ private:
     // I2C bus management
     void _switchToMainBus();
     void _switchToAltBus();
-    void _recoverI2CBus();  // ADD THIS LINE
+    void _switchToSGP2Bus();
+    void _recoverI2CBus();
     
     // Configurations
     I2CConfig _i2cConfig;
@@ -103,6 +106,9 @@ private:
     SGP41::Sensor _sgpSensor2;
     SHT31::Sensor _shtSensor1;
     SHT31::Sensor _shtSensor2;
+    
+    // ADDED: Separate Wire instance for second SGP41
+    TwoWire _sgp2Wire;
     
     // Data structures
     PMS5003::Data _pmsData1;

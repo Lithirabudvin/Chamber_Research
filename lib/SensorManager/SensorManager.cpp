@@ -8,10 +8,12 @@ SensorManager::SensorManager(const I2CConfig& i2cConfig, const PMSConfig& pmsCon
       _scdSensor(Wire, 0x62),
       _sfaSensor1(Wire, 0x5D),
       _sfaSensor2(Wire, 0x5D),
+      // SGP41 #1 uses main bus (21/22), SGP41 #2 uses separate bus (32/33)
       _sgpSensor1(Wire, 0x59),
-      _sgpSensor2(Wire, 0x59),
+      _sgpSensor2(_sgp2Wire, 0x59),  // Uses separate Wire instance
       _shtSensor1(Wire, 0x44),
       _shtSensor2(Wire, 0x45),
+      _sgp2Wire(1),  // Use Wire1 (second I2C bus)
       _pmsActive1(false), _pmsActive2(false),
       _sdpActive(false), _scdActive(false),
       _sfaActive1(false), _sfaActive2(false),
@@ -153,21 +155,29 @@ bool SensorManager::begin() {
     }
     _switchToMainBus();
     
-    // Initialize SGP41 sensors
+    // Initialize SGP41 sensors on separate buses
     Serial.println("\n[SGP41] Initializing...");
+    
+    // SGP41 #1 on main bus (21/22)
+    Serial.println("  SGP41 #1: Main bus (SDA=21, SCL=22)");
     _sgpActive1 = _sgpSensor1.begin();
-    _sgpActive2 = _sgpSensor2.begin();
     
     if (_sgpActive1) {
-        Serial.println("  ✓ SGP41 #1 initialized");
+        Serial.println("    ✓ SGP41 #1 initialized");
     } else {
-        Serial.println("  ✗ SGP41 #1 not detected");
+        Serial.println("    ✗ SGP41 #1 not detected");
     }
     
+    // SGP41 #2 on separate bus (32/33)
+    Serial.println("  SGP41 #2: Separate bus (SDA=32, SCL=33)");
+    _switchToSGP2Bus();
+    _sgpActive2 = _sgpSensor2.begin();
+    _switchToMainBus();  // Switch back to main bus
+    
     if (_sgpActive2) {
-        Serial.println("  ✓ SGP41 #2 initialized");
+        Serial.println("    ✓ SGP41 #2 initialized");
     } else {
-        Serial.println("  ✗ SGP41 #2 not detected");
+        Serial.println("    ✗ SGP41 #2 not detected");
     }
     
     // Print summary
@@ -243,6 +253,13 @@ void SensorManager::_switchToAltBus() {
     delay(5);
 }
 
+void SensorManager::_switchToSGP2Bus() {
+    // Initialize second I2C bus for SGP41 #2
+    _sgp2Wire.begin(_i2cConfig.sgp2SDA, _i2cConfig.sgp2SCL);
+    _sgp2Wire.setClock(100000);
+    delay(5);
+}
+
 bool SensorManager::readSDP() {
     if (!_sdpActive) return false;
     
@@ -271,7 +288,6 @@ bool SensorManager::readSDP() {
     return success;
 }
 
-// The rest of the functions remain the same as before...
 bool SensorManager::readPMS1() {
     if (!_pmsActive1) {
         _pmsData1.valid = false;
@@ -355,7 +371,12 @@ bool SensorManager::readSGP2() {
     float temp = getAverageTemperature();
     float hum = getAverageHumidity();
     
-    return _sgpSensor2.measureRawSignals(_sgpData2, temp, hum);
+    // Switch to SGP2 bus, read, then switch back
+    _switchToSGP2Bus();
+    bool result = _sgpSensor2.measureRawSignals(_sgpData2, temp, hum);
+    _switchToMainBus();
+    
+    return result;
 }
 
 bool SensorManager::readSHT1() {
