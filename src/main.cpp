@@ -13,7 +13,7 @@ bool sdp810Verified = false;
 // Global objects
 SensorManager::I2CConfig i2cConfig;
 SensorManager::PMSConfig pmsConfig;
-SensorManager* sensorManager = nullptr;  // Changed to pointer
+SensorManager* sensorManager = nullptr;
 
 // ThingsBoard Client Configuration
 ThingsBoardConfig tbConfig;
@@ -357,7 +357,7 @@ void setup() {
     Serial.println("    with ThingsBoard Gateway MQTT");
     Serial.println("    and SDP810 Air Flow Sensor");
     Serial.println("════════════════════════════════════════");
-    Serial.println("  Version: 2.1 (Dual SGP41 Support)");
+    Serial.println("  Version: 2.2 (Dual I2C Bus Support)");
     Serial.println("  ThingsBoard Server: cloud.thingsnode.cc");
     Serial.println("  Gateway Token: " + String(GATEWAY_TOKEN));
     Serial.println("  WiFi: " + String(WIFI_SSID));
@@ -366,10 +366,8 @@ void setup() {
     // Configure I2C pins for all sensors
     i2cConfig.mainSDA = 21;
     i2cConfig.mainSCL = 22;
-    i2cConfig.altSDA = 25;
+    i2cConfig.altSDA = 25;   // For SFA30 #2 and SGP41 #2
     i2cConfig.altSCL = 26;
-    i2cConfig.sgp2SDA = 32;   // For second SGP41
-    i2cConfig.sgp2SCL = 33;   // For second SGP41
     
     // PMS config
     pmsConfig.rxPin1 = 16;
@@ -381,9 +379,9 @@ void setup() {
     sensorManager = new SensorManager(i2cConfig, pmsConfig);
     
     // Initialize sensor manager
-    Serial.println("\n[System] Initializing 12 sensors with dual SGP41 support...");
-    Serial.println("  SGP41 #1: Main bus (SDA=21, SCL=22)");
-    Serial.println("  SGP41 #2: Separate bus (SDA=32, SCL=33)");
+    Serial.println("\n[System] Initializing 12 sensors with dual I2C bus support...");
+    Serial.println("  Main Bus (21/22): SDP810, SCD40, SHT31 #1, SHT31 #2, SFA30 #1, SGP41 #1");
+    Serial.println("  Alt Bus (25/26):  SFA30 #2, SGP41 #2");
     
     if (!sensorManager->begin()) {
         Serial.println("[ERROR] Failed to initialize sensors!");
@@ -455,8 +453,8 @@ void setup() {
     } else {
         Serial.println("  SDP810: ⚠ NOT VERIFIED / DISABLED");
     }
-    Serial.println("  SGP41 #1: Main bus (21/22)");
-    Serial.println("  SGP41 #2: Separate bus (32/33)");
+    Serial.println("  Main Bus (21/22): SDP810, SCD40, SHT31, SFA30 #1, SGP41 #1");
+    Serial.println("  Alt Bus (25/26):  SFA30 #2, SGP41 #2");
     Serial.println("Local display interval:   5 seconds");
     Serial.println("Cloud upload interval:    5 seconds (REAL-TIME)");
     Serial.println("Total sensors:           12");
@@ -511,12 +509,12 @@ void loop() {
             }
         }
         
-        // Read other I2C sensors
+        // Read other I2C sensors (NO BUS SWITCHING NEEDED!)
         sensorManager->readSCD();
-        sensorManager->readSFA1();
-        sensorManager->readSFA2();
-        sensorManager->readSGP1();  // Now on separate bus
-        sensorManager->readSGP2();  // Now on separate bus
+        sensorManager->readSFA1();  // Main bus
+        sensorManager->readSFA2();  // Alt bus
+        sensorManager->readSGP1();  // Main bus
+        sensorManager->readSGP2();  // Alt bus
         sensorManager->readSHT1();
         sensorManager->readSHT2();
         
@@ -572,11 +570,9 @@ void loop() {
             Serial.println("  SDP810: ✗ Not detected");
         }
         
-        // Show SGP41 bus status
-        Serial.printf("  SGP41 #1: %s (Main bus 21/22)\n", 
-                     sensorManager->isSGP1Active() ? "Active" : "Inactive");
-        Serial.printf("  SGP41 #2: %s (Separate bus 32/33)\n", 
-                     sensorManager->isSGP2Active() ? "Active" : "Inactive");
+        // Show I2C bus status
+        Serial.println("  Main Bus (21/22): SDP810, SCD40, SHT31, SFA30 #1, SGP41 #1");
+        Serial.println("  Alt Bus (25/26):  SFA30 #2, SGP41 #2");
         
         // Show WiFi and MQTT status
         if (thingsBoard) {
@@ -637,7 +633,7 @@ void loop() {
         
         Serial.println();
         
-        // Display SGP41 data (BOTH will now work independently)
+        // Display SGP41 data
         if (sensorManager->isSGP1Active())
             printSGPData(sensorManager->getSGP1Data(), 1);
         if (sensorManager->isSGP2Active())

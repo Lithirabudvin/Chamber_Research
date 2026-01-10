@@ -4,16 +4,17 @@ SensorManager::SensorManager(const I2CConfig& i2cConfig, const PMSConfig& pmsCon
     : _i2cConfig(i2cConfig), _pmsConfig(pmsConfig),
       _pmsSensor1(Serial2, pmsConfig.rxPin1, pmsConfig.txPin1),
       _pmsSensor2(Serial1, pmsConfig.rxPin2, pmsConfig.txPin2),
+      // Main bus sensors (Wire - pins 21/22)
       _sdpSensor(Wire, 0x25),
       _scdSensor(Wire, 0x62),
       _sfaSensor1(Wire, 0x5D),
-      _sfaSensor2(Wire, 0x5D),
-      // SGP41 #1 uses main bus (21/22), SGP41 #2 uses separate bus (32/33)
       _sgpSensor1(Wire, 0x59),
-      _sgpSensor2(_sgp2Wire, 0x59),  // Uses separate Wire instance
       _shtSensor1(Wire, 0x44),
       _shtSensor2(Wire, 0x45),
-      _sgp2Wire(1),  // Use Wire1 (second I2C bus)
+      // Alternate bus sensors (Wire1 - pins 25/26)
+      _sfaSensor2(_altWire, 0x5D),
+      _sgpSensor2(_altWire, 0x59),
+      _altWire(1),  // Wire1 instance
       _pmsActive1(false), _pmsActive2(false),
       _sdpActive(false), _scdActive(false),
       _sfaActive1(false), _sfaActive2(false),
@@ -29,10 +30,16 @@ bool SensorManager::begin() {
     // First, recover I2C bus in case it's stuck
     _recoverI2CBus();
     
-    // Initialize main I2C bus
+    // Initialize main I2C bus (pins 21/22)
     Serial.printf("  Main I2C: SDA=%d, SCL=%d\n", _i2cConfig.mainSDA, _i2cConfig.mainSCL);
     Wire.begin(_i2cConfig.mainSDA, _i2cConfig.mainSCL);
     Wire.setClock(100000);
+    delay(100);
+    
+    // Initialize alternate I2C bus (pins 25/26)
+    Serial.printf("  Alt I2C:  SDA=%d, SCL=%d\n", _i2cConfig.altSDA, _i2cConfig.altSCL);
+    _altWire.begin(_i2cConfig.altSDA, _i2cConfig.altSCL);
+    _altWire.setClock(100000);
     delay(100);
     
     // Initialize PMS5003 sensors
@@ -41,7 +48,7 @@ bool SensorManager::begin() {
     delay(100);
     _pmsActive2 = _pmsSensor2.begin();
     
-    // ========== UPDATED SDP810 INITIALIZATION ==========
+    // ========== SDP810 INITIALIZATION ==========
     Serial.println("\n[SDP810] Initializing...");
     
     // Try multiple times to initialize SDP810
@@ -134,46 +141,43 @@ bool SensorManager::begin() {
     }
     
     // Initialize SFA30 sensors
-    Serial.println("\n[SFA30 #1] Initializing on main bus...");
+    Serial.println("\n[SFA30] Initializing...");
+    
+    // SFA30 #1 on main bus (21/22)
+    Serial.println("  SFA30 #1: Main bus (SDA=21, SCL=22)");
     _sfaActive1 = _sfaSensor1.begin();
     if (_sfaActive1) {
         _sfaActive1 = _sfaSensor1.startContinuousMeasurement();
-        Serial.println("  ✓ SFA30 #1 initialized");
+        Serial.println("    ✓ SFA30 #1 initialized");
     } else {
-        Serial.println("  ✗ SFA30 #1 not detected");
+        Serial.println("    ✗ SFA30 #1 not detected");
     }
     
-    // Initialize SFA30 #2 on alternate pins
-    Serial.println("\n[SFA30 #2] Initializing on alternate pins...");
-    _switchToAltBus();
+    // SFA30 #2 on alternate bus (25/26)
+    Serial.println("  SFA30 #2: Alternate bus (SDA=25, SCL=26)");
     _sfaActive2 = _sfaSensor2.begin();
     if (_sfaActive2) {
         _sfaActive2 = _sfaSensor2.startContinuousMeasurement();
-        Serial.println("  ✓ SFA30 #2 initialized");
+        Serial.println("    ✓ SFA30 #2 initialized");
     } else {
-        Serial.println("  ✗ SFA30 #2 not detected");
+        Serial.println("    ✗ SFA30 #2 not detected");
     }
-    _switchToMainBus();
     
-    // Initialize SGP41 sensors on separate buses
+    // Initialize SGP41 sensors
     Serial.println("\n[SGP41] Initializing...");
     
     // SGP41 #1 on main bus (21/22)
     Serial.println("  SGP41 #1: Main bus (SDA=21, SCL=22)");
     _sgpActive1 = _sgpSensor1.begin();
-    
     if (_sgpActive1) {
         Serial.println("    ✓ SGP41 #1 initialized");
     } else {
         Serial.println("    ✗ SGP41 #1 not detected");
     }
     
-    // SGP41 #2 on separate bus (32/33)
-    Serial.println("  SGP41 #2: Separate bus (SDA=32, SCL=33)");
-    _switchToSGP2Bus();
+    // SGP41 #2 on alternate bus (25/26)
+    Serial.println("  SGP41 #2: Alternate bus (SDA=25, SCL=26)");
     _sgpActive2 = _sgpSensor2.begin();
-    _switchToMainBus();  // Switch back to main bus
-    
     if (_sgpActive2) {
         Serial.println("    ✓ SGP41 #2 initialized");
     } else {
@@ -235,29 +239,6 @@ void SensorManager::_recoverI2CBus() {
     }
     
     delay(50);
-}
-
-void SensorManager::_switchToMainBus() {
-    Wire.end();
-    delay(5);
-    Wire.begin(_i2cConfig.mainSDA, _i2cConfig.mainSCL);
-    Wire.setClock(100000);
-    delay(5);
-}
-
-void SensorManager::_switchToAltBus() {
-    Wire.end();
-    delay(5);
-    Wire.begin(_i2cConfig.altSDA, _i2cConfig.altSCL);
-    Wire.setClock(100000);
-    delay(5);
-}
-
-void SensorManager::_switchToSGP2Bus() {
-    // Initialize second I2C bus for SGP41 #2
-    _sgp2Wire.begin(_i2cConfig.sgp2SDA, _i2cConfig.sgp2SCL);
-    _sgp2Wire.setClock(100000);
-    delay(5);
 }
 
 bool SensorManager::readSDP() {
@@ -343,17 +324,14 @@ bool SensorManager::readSCD() {
 
 bool SensorManager::readSFA1() {
     if (!_sfaActive1) return false;
+    // Uses Wire (main bus) - NO BUS SWITCHING
     return _sfaSensor1.readMeasurement(_sfaData1);
 }
 
 bool SensorManager::readSFA2() {
     if (!_sfaActive2) return false;
-    
-    _switchToAltBus();
-    bool result = _sfaSensor2.readMeasurement(_sfaData2);
-    _switchToMainBus();
-    
-    return result;
+    // Uses _altWire (alternate bus) - NO BUS SWITCHING
+    return _sfaSensor2.readMeasurement(_sfaData2);
 }
 
 bool SensorManager::readSGP1() {
@@ -362,6 +340,7 @@ bool SensorManager::readSGP1() {
     float temp = getAverageTemperature();
     float hum = getAverageHumidity();
     
+    // Uses Wire (main bus) - NO BUS SWITCHING
     return _sgpSensor1.measureRawSignals(_sgpData1, temp, hum);
 }
 
@@ -371,12 +350,8 @@ bool SensorManager::readSGP2() {
     float temp = getAverageTemperature();
     float hum = getAverageHumidity();
     
-    // Switch to SGP2 bus, read, then switch back
-    _switchToSGP2Bus();
-    bool result = _sgpSensor2.measureRawSignals(_sgpData2, temp, hum);
-    _switchToMainBus();
-    
-    return result;
+    // Uses _altWire (alternate bus) - NO BUS SWITCHING
+    return _sgpSensor2.measureRawSignals(_sgpData2, temp, hum);
 }
 
 bool SensorManager::readSHT1() {

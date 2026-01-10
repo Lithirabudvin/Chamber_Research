@@ -15,10 +15,8 @@ public:
     struct I2CConfig {
         int mainSDA = 21;
         int mainSCL = 22;
-        int altSDA = 25;
+        int altSDA = 25;    // For SFA30 #2 and SGP41 #2
         int altSCL = 26;
-        int sgp2SDA = 32;   // ADDED: For second SGP41
-        int sgp2SCL = 33;   // ADDED: For second SGP41
     };
     
     // PMS5003 Configuration
@@ -85,10 +83,7 @@ public:
     float getAverageHumidity() const;
     
 private:
-    // I2C bus management
-    void _switchToMainBus();
-    void _switchToAltBus();
-    void _switchToSGP2Bus();
+    // I2C bus recovery
     void _recoverI2CBus();
     
     // Configurations
@@ -107,8 +102,8 @@ private:
     SHT31::Sensor _shtSensor1;
     SHT31::Sensor _shtSensor2;
     
-    // ADDED: Separate Wire instance for second SGP41
-    TwoWire _sgp2Wire;
+    // Wire instances - ESP32 has 2: Wire (0) and Wire1 (1)
+    TwoWire _altWire;  // Wire1 for alternate bus (pins 25/26)
     
     // Data structures
     PMS5003::Data _pmsData1;
