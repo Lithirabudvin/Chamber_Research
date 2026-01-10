@@ -99,13 +99,63 @@ void SensorManager::_switchToAltBus() {
 }
 
 bool SensorManager::readPMS1() {
-    if (!_pmsActive1) return false;
-    return _pmsSensor1.readDataNonBlocking(_pmsData1);
+    if (!_pmsActive1) {
+        _pmsData1.valid = false;
+        return false;
+    }
+    
+    PMS5003::Data newData;
+    bool success = _pmsSensor1.readDataNonBlocking(newData);
+    
+    if (success) {
+        // New data received successfully
+        _pmsData1 = newData;
+        return true;
+    } else {
+        // No new data received
+        // Check if existing data is still fresh
+        if (!_pmsSensor1.isDataFresh(PMS_DATA_TIMEOUT)) {
+            // Data is stale - invalidate it
+            _pmsData1.valid = false;
+            
+            // Optional: Check if sensor has stopped responding completely
+            if (_pmsSensor1.getTimeSinceLastRead() > PMS_DISCONNECTION_TIMEOUT) {
+                // Sensor appears to be disconnected
+                Serial.println("[PMS5003 #1] ⚠ Sensor not responding - may be disconnected!");
+            }
+        }
+        return false;
+    }
 }
 
 bool SensorManager::readPMS2() {
-    if (!_pmsActive2) return false;
-    return _pmsSensor2.readDataNonBlocking(_pmsData2);
+    if (!_pmsActive2) {
+        _pmsData2.valid = false;
+        return false;
+    }
+    
+    PMS5003::Data newData;
+    bool success = _pmsSensor2.readDataNonBlocking(newData);
+    
+    if (success) {
+        // New data received successfully
+        _pmsData2 = newData;
+        return true;
+    } else {
+        // No new data received
+        // Check if existing data is still fresh
+        if (!_pmsSensor2.isDataFresh(PMS_DATA_TIMEOUT)) {
+            // Data is stale - invalidate it
+            _pmsData2.valid = false;
+            
+            // Optional: Check if sensor has stopped responding completely
+            if (_pmsSensor2.getTimeSinceLastRead() > PMS_DISCONNECTION_TIMEOUT) {
+                // Sensor appears to be disconnected
+                Serial.println("[PMS5003 #2] ⚠ Sensor not responding - may be disconnected!");
+            }
+        }
+        return false;
+    }
 }
 
 bool SensorManager::readSDP() {
@@ -184,6 +234,25 @@ void SensorManager::manageHeaters() {
         _shtData2.heaterEnabled = _shtHeaterEnabled2;
         Serial.printf("[SHT31 #2] Heater %s\n", _shtHeaterEnabled2 ? "ON" : "OFF");
     }
+}
+
+// NEW: PMS sensor health checking methods
+bool SensorManager::isPMS1Responding() const {
+    return _pmsActive1 && _pmsSensor1.isSensorResponding();
+}
+
+bool SensorManager::isPMS2Responding() const {
+    return _pmsActive2 && _pmsSensor2.isSensorResponding();
+}
+
+unsigned long SensorManager::getPMS1TimeSinceLastRead() const {
+    if (!_pmsActive1) return ULONG_MAX;
+    return _pmsSensor1.getTimeSinceLastRead();
+}
+
+unsigned long SensorManager::getPMS2TimeSinceLastRead() const {
+    if (!_pmsActive2) return ULONG_MAX;
+    return _pmsSensor2.getTimeSinceLastRead();
 }
 
 float SensorManager::getAverageTemperature() const {

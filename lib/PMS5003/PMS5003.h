@@ -19,6 +19,13 @@ namespace PMS5003 {
         uint16_t particles_50um;
         uint16_t particles_100um;
         bool valid;
+        unsigned long timestamp;
+        
+        Data() : pm10_standard(0), pm25_standard(0), pm100_standard(0),
+                 pm10_env(0), pm25_env(0), pm100_env(0),
+                 particles_03um(0), particles_05um(0), particles_10um(0),
+                 particles_25um(0), particles_50um(0), particles_100um(0),
+                 valid(false), timestamp(0) {}
     };
 
     class Sensor {
@@ -33,6 +40,10 @@ namespace PMS5003 {
         void sleep();
         bool isActive() const { return _active; }
         void setActive(bool active) { _active = active; }
+        
+        bool isDataFresh(uint32_t maxAge = 5000) const;
+        unsigned long getTimeSinceLastRead() const;
+        bool isSensorResponding() const;
         
     private:
         HardwareSerial& _serial;

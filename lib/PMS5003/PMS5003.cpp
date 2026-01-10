@@ -17,13 +17,17 @@ namespace PMS5003 {
         _serial.begin(9600, SERIAL_8N1, _rxPin, _txPin);
         delay(100);
         _active = true;
+        _lastRead = 0;
         wakeUp();
         delay(30);
         return true;
     }
 
     bool Sensor::readData(Data& data, uint32_t timeout) {
-        if (!_active) return false;
+        if (!_active) {
+            data.valid = false;
+            return false;
+        }
         
         unsigned long startTime = millis();
         _bufferIndex = 0;
@@ -45,17 +49,24 @@ namespace PMS5003 {
                 if (_bufferIndex == 32) {
                     if (_parseData(data, _buffer)) {
                         _lastRead = millis();
+                        data.timestamp = _lastRead;
                         return true;
                     }
+                    data.valid = false;
                     _bufferIndex = 0;
                 }
             }
         }
+        
+        data.valid = false;
         return false;
     }
 
     bool Sensor::readDataNonBlocking(Data& data) {
-        if (!_active) return false;
+        if (!_active) {
+            data.valid = false;
+            return false;
+        }
         
         while (_serial.available()) {
             uint8_t byte = _serial.read();
@@ -73,12 +84,15 @@ namespace PMS5003 {
             if (_bufferIndex == 32) {
                 if (_parseData(data, _buffer)) {
                     _lastRead = millis();
+                    data.timestamp = _lastRead;
                     _bufferIndex = 0;
                     return true;
                 }
+                data.valid = false;
                 _bufferIndex = 0;
             }
         }
+        
         return false;
     }
 
@@ -94,12 +108,27 @@ namespace PMS5003 {
         delay(10);
     }
 
+    bool Sensor::isDataFresh(uint32_t maxAge) const {
+        if (_lastRead == 0) return false;
+        unsigned long age = millis() - _lastRead;
+        return age < maxAge;
+    }
+
+    unsigned long Sensor::getTimeSinceLastRead() const {
+        if (_lastRead == 0) return ULONG_MAX;
+        return millis() - _lastRead;
+    }
+
+    bool Sensor::isSensorResponding() const {
+        return _active && _lastRead != 0 && isDataFresh(10000);
+    }
+
     bool Sensor::_parseData(Data& data, const uint8_t* buffer) {
-        // Verify checksum
         uint16_t checksum = _calculateChecksum(buffer, 30);
         uint16_t receivedChecksum = (buffer[30] << 8) | buffer[31];
         
         if (checksum != receivedChecksum) {
+            data.valid = false;
             return false;
         }
         

@@ -21,7 +21,7 @@ ThingsBoardClient* thingsBoard = nullptr;
 
 // Timing
 unsigned long lastDisplayTime = 0;
-const unsigned long DISPLAY_INTERVAL = 5000;
+const unsigned long DISPLAY_INTERVAL = 10000;
 
 // Utility functions
 String getCO2Quality(uint16_t co2) {
@@ -390,7 +390,7 @@ void setup() {
     tbConfig.gatewayToken = GATEWAY_TOKEN;
     tbConfig.wifiSSID = WIFI_SSID;
     tbConfig.wifiPassword = WIFI_PASSWORD;
-    tbConfig.sendInterval = 5000;
+    tbConfig.sendInterval = 20000;
     tbConfig.useSSL = false;
     tbConfig.gmtOffset_sec = 19800;
     tbConfig.daylightOffset_sec = 0;

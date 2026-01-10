@@ -72,6 +72,12 @@ public:
     bool isSHT1Active() const { return _shtActive1; }
     bool isSHT2Active() const { return _shtActive2; }
     
+    // NEW: PMS sensor health checking
+    bool isPMS1Responding() const;
+    bool isPMS2Responding() const;
+    unsigned long getPMS1TimeSinceLastRead() const;
+    unsigned long getPMS2TimeSinceLastRead() const;
+    
     // Utility functions for SGP41 compensation
     float getAverageTemperature() const;
     float getAverageHumidity() const;
@@ -130,4 +136,8 @@ private:
     
     // Error tracking
     const int MAX_ERRORS = 10;
+    
+    // PMS timeout configuration
+    const unsigned long PMS_DATA_TIMEOUT = 5000;  // 5 seconds
+    const unsigned long PMS_DISCONNECTION_TIMEOUT = 10000;  // 10 seconds
 };
