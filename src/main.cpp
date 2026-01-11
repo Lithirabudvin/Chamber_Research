@@ -21,7 +21,7 @@ ThingsBoardClient* thingsBoard = nullptr;
 
 // Timing
 unsigned long lastDisplayTime = 0;
-const unsigned long DISPLAY_INTERVAL = 10000;
+const unsigned long DISPLAY_INTERVAL = 30000;
 
 // Utility functions
 String getCO2Quality(uint16_t co2) {
@@ -208,27 +208,65 @@ void printSCDData(const SCD40::Data& data) {
     Serial.println("└──────────────────────────────────────┘");
 }
 
+
+String getHCHOHealthRisk(float hcho_ppb) {
+    if (hcho_ppb < 80) return "✅ Safe";
+    else if (hcho_ppb < 100) return "⚠️  Caution";
+    else if (hcho_ppb < 200) return "⚠️  Moderate";
+    else if (hcho_ppb < 400) return "🔴 Strong irritation";
+    else if (hcho_ppb < 800) return "🔴 Severe";
+    else if (hcho_ppb < 1500) return "🔴🔴 EXTREMELY DANGEROUS";
+    else return "🔴🔴🔴 CRITICAL - EVACUATE";
+}
+
 void printSFAData(const SFA30::Data& data, int sensorNum) {
     if (!data.valid) {
         Serial.printf("[SFA30 #%d] No valid data\n", sensorNum);
         return;
     }
     
-    // ADD THIS CHECK: Don't display zeros
+    // Don't skip zeros - show warning but still display
     if (data.formaldehyde == 0.0 && data.temperature == 0.0 && data.humidity == 0.0) {
-        Serial.printf("[SFA30 #%d] Sensor disconnected or invalid data\n", sensorNum);
+        Serial.printf("[SFA30 #%d] ⚠️  Sensor returning zeros - may be disconnected\n", sensorNum);
         return;
     }
     
     String quality = getHCHOQuality(data.formaldehyde);
+    String healthRisk = getHCHOHealthRisk(data.formaldehyde);
     
     Serial.printf("┌────────────── HCHO SENSOR #%d ─────────────┐\n", sensorNum);
-    Serial.printf("│ HCHO:        %6.1f ppb              │\n", data.formaldehyde);
-    Serial.printf("│              %6.3f ppm              │\n", data.formaldehyde / 1000.0);
+    Serial.printf("│ HCHO:      %8.1f ppb              │\n", data.formaldehyde);
+    Serial.printf("│            %8.3f ppm              │\n", data.formaldehyde / 1000.0);
     Serial.printf("│ Temperature:   %5.1f °C              │\n", data.temperature);
     Serial.printf("│ Humidity:      %5.1f %%               │\n", data.humidity);
     Serial.println("├──────────────────────────────────────┤");
     Serial.printf("│ Quality:       %-22s│\n", quality.c_str());
+    Serial.printf("│ Health Risk:   %-22s│\n", healthRisk.c_str());
+    
+    // Show WHO comparison for high readings
+    if (data.formaldehyde > 80) {
+        float who_limit = 80.0; // ppb
+        float ratio = data.formaldehyde / who_limit;
+        Serial.printf("│ WHO Limit:     %.1fx EXCEEDED           │\n", ratio);
+    }
+    
+    // Show trend indicator if you want (optional)
+    static float lastReading1 = 0;
+    static float lastReading2 = 0;
+    float* lastReading = (sensorNum == 1) ? &lastReading1 : &lastReading2;
+    
+    if (*lastReading > 0) {
+        float change = data.formaldehyde - *lastReading;
+        if (abs(change) > 10) { // Only show if significant change
+            if (change > 0) {
+                Serial.printf("│ Trend:         ↑ Rising (+%.0f ppb)       │\n", change);
+            } else {
+                Serial.printf("│ Trend:         ↓ Falling (%.0f ppb)      │\n", change);
+            }
+        }
+    }
+    *lastReading = data.formaldehyde;
+    
     Serial.println("└──────────────────────────────────────┘");
 }
 
@@ -418,7 +456,7 @@ void setup() {
     tbConfig.gatewayToken = GATEWAY_TOKEN;
     tbConfig.wifiSSID = WIFI_SSID;
     tbConfig.wifiPassword = WIFI_PASSWORD;
-    tbConfig.sendInterval = 20000;
+    tbConfig.sendInterval = 15000;
     tbConfig.useSSL = false;
     tbConfig.gmtOffset_sec = 19800;
     tbConfig.daylightOffset_sec = 0;

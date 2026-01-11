@@ -532,32 +532,44 @@ bool SensorManager::readSFA1() {
     
     bool result = _sfaSensor1.readMeasurement(_sfaData1);
     
-    // CRITICAL FIX: Check if data is actually valid (not all zeros)
+    // CRITICAL FIX: Only validate for sensor errors, NOT for high readings
     if (result && _sfaData1.valid) {
-        // Validate the actual readings
         bool dataValid = true;
         
-        // Check for zeros or unreasonable values
-        if (_sfaData1.formaldehyde < 0 || _sfaData1.formaldehyde > 1000) { // ppb range check
+        // Only check for SENSOR ERRORS, not high readings!
+        
+        // 1. Check for negative values (sensor error)
+        if (_sfaData1.formaldehyde < 0) {
             dataValid = false;
-            Serial.println("[SFA30 #1] Warning: Formaldehyde reading out of range: " + String(_sfaData1.formaldehyde) + " ppb");
+            Serial.println("[SFA30 #1] ERROR: Negative formaldehyde reading: " + String(_sfaData1.formaldehyde) + " ppb");
         }
         
-        if (_sfaData1.temperature < -40 || _sfaData1.temperature > 125) { // SFA30 temperature range
+        // 2. Check for impossibly high sensor saturation (>10,000 ppb is likely sensor failure)
+        if (_sfaData1.formaldehyde > 10000) {
             dataValid = false;
-            Serial.println("[SFA30 #1] Warning: Temperature reading out of range: " + String(_sfaData1.temperature) + " °C");
+            Serial.println("[SFA30 #1] ERROR: Sensor saturated/failed: " + String(_sfaData1.formaldehyde) + " ppb");
         }
         
+        // 3. Temperature range check (sensor spec: -40°C to +125°C)
+        if (_sfaData1.temperature < -40 || _sfaData1.temperature > 125) {
+            dataValid = false;
+            Serial.println("[SFA30 #1] ERROR: Temperature out of sensor range: " + String(_sfaData1.temperature) + " °C");
+        }
+        
+        // 4. Humidity range check (0-100% RH)
         if (_sfaData1.humidity < 0 || _sfaData1.humidity > 100) {
             dataValid = false;
-            Serial.println("[SFA30 #1] Warning: Humidity reading out of range: " + String(_sfaData1.humidity) + " %");
+            Serial.println("[SFA30 #1] ERROR: Humidity out of range: " + String(_sfaData1.humidity) + " %");
         }
         
-        // Special check for all zeros (disconnected sensor)
+        // 5. Check for all zeros (disconnected sensor)
         if (_sfaData1.formaldehyde == 0.0 && _sfaData1.temperature == 0.0 && _sfaData1.humidity == 0.0) {
             dataValid = false;
-            Serial.println("[SFA30 #1] Warning: All readings are zero - sensor may be disconnected");
+            Serial.println("[SFA30 #1] ERROR: All readings are zero - sensor may be disconnected");
         }
+        
+        // REMOVED: No continuous warnings - only show in periodic display
+        // Data is valid, just keep reading silently
         
         if (!dataValid) {
             _sfaData1.valid = false;
@@ -574,19 +586,11 @@ bool SensorManager::readSFA1() {
             recoverMainI2CBus();
             failCount = 0;
             
-            // Also mark sensor as inactive if too many failures
-            static int totalFailCount = 0;
-            totalFailCount++;
-            if (totalFailCount > 10) {
-                Serial.println("[SFA30 #1] Too many total failures, marking as inactive");
-                _sfaActive1 = false;
-                totalFailCount = 0;
-            }
+            // REMOVED: Don't mark as inactive for too many failures
+            // Just keep trying!
         }
     } else {
         failCount = 0;
-        static int totalFailCount = 0;
-        totalFailCount = 0; // Reset on success
     }
     
     return result;
@@ -615,32 +619,44 @@ bool SensorManager::readSFA2() {
     
     bool result = _sfaSensor2.readMeasurement(_sfaData2);
     
-    // CRITICAL FIX: Check if data is actually valid (not all zeros)
+    // CRITICAL FIX: Only validate for sensor errors, NOT for high readings
     if (result && _sfaData2.valid) {
-        // Validate the actual readings
         bool dataValid = true;
         
-        // Check for zeros or unreasonable values
-        if (_sfaData2.formaldehyde < 0 || _sfaData2.formaldehyde > 1000) { // ppb range check
+        // Only check for SENSOR ERRORS, not high readings!
+        
+        // 1. Check for negative values (sensor error)
+        if (_sfaData2.formaldehyde < 0) {
             dataValid = false;
-            Serial.println("[SFA30 #2] Warning: Formaldehyde reading out of range: " + String(_sfaData2.formaldehyde) + " ppb");
+            Serial.println("[SFA30 #2] ERROR: Negative formaldehyde reading: " + String(_sfaData2.formaldehyde) + " ppb");
         }
         
-        if (_sfaData2.temperature < -40 || _sfaData2.temperature > 125) { // SFA30 temperature range
+        // 2. Check for impossibly high sensor saturation (>10,000 ppb is likely sensor failure)
+        if (_sfaData2.formaldehyde > 10000) {
             dataValid = false;
-            Serial.println("[SFA30 #2] Warning: Temperature reading out of range: " + String(_sfaData2.temperature) + " °C");
+            Serial.println("[SFA30 #2] ERROR: Sensor saturated/failed: " + String(_sfaData2.formaldehyde) + " ppb");
         }
         
+        // 3. Temperature range check (sensor spec: -40°C to +125°C)
+        if (_sfaData2.temperature < -40 || _sfaData2.temperature > 125) {
+            dataValid = false;
+            Serial.println("[SFA30 #2] ERROR: Temperature out of sensor range: " + String(_sfaData2.temperature) + " °C");
+        }
+        
+        // 4. Humidity range check (0-100% RH)
         if (_sfaData2.humidity < 0 || _sfaData2.humidity > 100) {
             dataValid = false;
-            Serial.println("[SFA30 #2] Warning: Humidity reading out of range: " + String(_sfaData2.humidity) + " %");
+            Serial.println("[SFA30 #2] ERROR: Humidity out of range: " + String(_sfaData2.humidity) + " %");
         }
         
-        // Special check for all zeros (disconnected sensor)
+        // 5. Check for all zeros (disconnected sensor)
         if (_sfaData2.formaldehyde == 0.0 && _sfaData2.temperature == 0.0 && _sfaData2.humidity == 0.0) {
             dataValid = false;
-            Serial.println("[SFA30 #2] Warning: All readings are zero - sensor may be disconnected");
+            Serial.println("[SFA30 #2] ERROR: All readings are zero - sensor may be disconnected");
         }
+        
+        // REMOVED: No continuous warnings - only show in periodic display
+        // Data is valid, just keep reading silently
         
         if (!dataValid) {
             _sfaData2.valid = false;
@@ -657,19 +673,11 @@ bool SensorManager::readSFA2() {
             recoverAltI2CBus();
             failCount = 0;
             
-            // Also mark sensor as inactive if too many failures
-            static int totalFailCount = 0;
-            totalFailCount++;
-            if (totalFailCount > 10) {
-                Serial.println("[SFA30 #2] Too many total failures, marking as inactive");
-                _sfaActive2 = false;
-                totalFailCount = 0;
-            }
+            // REMOVED: Don't mark as inactive for too many failures
+            // Just keep trying!
         }
     } else {
         failCount = 0;
-        static int totalFailCount = 0;
-        totalFailCount = 0; // Reset on success
     }
     
     return result;
