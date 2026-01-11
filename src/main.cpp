@@ -208,7 +208,6 @@ void printSCDData(const SCD40::Data& data) {
     Serial.println("└──────────────────────────────────────┘");
 }
 
-
 String getHCHOHealthRisk(float hcho_ppb) {
     if (hcho_ppb < 80) return "✅ Safe";
     else if (hcho_ppb < 100) return "⚠️  Caution";
@@ -456,14 +455,17 @@ void setup() {
     tbConfig.gatewayToken = GATEWAY_TOKEN;
     tbConfig.wifiSSID = WIFI_SSID;
     tbConfig.wifiPassword = WIFI_PASSWORD;
-    tbConfig.sendInterval = 15000;
+    tbConfig.sendInterval = 15000;  // 15 seconds is fine for most applications
     tbConfig.useSSL = false;
     tbConfig.gmtOffset_sec = 19800;
     tbConfig.daylightOffset_sec = 0;
     
-    thingsBoard = new ThingsBoardClient(tbConfig);
+    // NEW: Add persistent configuration
+    tbConfig.persistentSession = true;
+    tbConfig.clientId = "";  // Will auto-generate from MAC
     
-    Serial.println("\n[System] Initializing WiFi and MQTT Gateway...");
+    thingsBoard = new ThingsBoardClient(tbConfig);
+Serial.println("\n[System] Initializing WiFi and MQTT Gateway...");
     if (thingsBoard->begin()) {
         Serial.println("[System] ✓ WiFi connected");
         
@@ -471,8 +473,25 @@ void setup() {
             Serial.println("[System] ✓ Time synchronized with NTP");
         }
         
-        Serial.println("[System] Waiting for MQTT connection...");
-        delay(2000);
+        Serial.println("[System] Waiting for MQTT and gateway setup to complete...");
+        
+        // CRITICAL: Wait for full gateway setup
+        unsigned long startWait = millis();
+        while (millis() - startWait < 10000) {  // Wait up to 10 seconds
+            thingsBoard->loop();  // Process MQTT messages
+            delay(100);
+            
+            // Check if connected
+            if (thingsBoard->isMQTTConnected()) {
+                Serial.println("[System] ✓ MQTT and gateway ready");
+                break;
+            }
+        }
+        
+        if (!thingsBoard->isMQTTConnected()) {
+            Serial.println("[System] ⚠ MQTT setup taking longer than expected");
+            Serial.println("[System] Continuing, will retry in main loop");
+        }
     } else {
         Serial.println("[System] ✗ WiFi connection failed!");
         Serial.println("  Continuing in offline mode...");
@@ -520,6 +539,7 @@ void loop() {
     unsigned long now = millis();
     
     // CRITICAL: Call MQTT loop frequently for real-time operation
+    // This maintains the heartbeat and processes messages
     if (thingsBoard) {
         thingsBoard->loop();
     }
@@ -542,10 +562,6 @@ void loop() {
                 
                 if (sdpOk) {
                     const SDP810::Data& data = sensorManager->getSDPData();
-                    Serial.printf("[SDP810 Check] Pressure: %+7.2f Pa, Temp: %6.2f°C\n",
-                                 data.differential_pressure, data.temperature);
-                    
-                    // Re-verify if values become unreasonable
                     if (data.temperature < -40 || data.temperature > 125) {
                         Serial.println("[SDP810] ⚠ Temperature reading out of range!");
                     }
@@ -553,40 +569,26 @@ void loop() {
             }
         }
         
-        // Read other I2C sensors (NO BUS SWITCHING NEEDED!)
+        // Read other I2C sensors
         sensorManager->readSCD();
-        sensorManager->readSFA1();  // Main bus
-        sensorManager->readSFA2();  // Alt bus
-        sensorManager->readSGP1();  // Main bus
-        sensorManager->readSGP2();  // Alt bus
+        sensorManager->readSFA1();
+        sensorManager->readSFA2();
+        sensorManager->readSGP1();
+        sensorManager->readSGP2();
         sensorManager->readSHT1();
         sensorManager->readSHT2();
         
         // Manage SHT31 heaters
         sensorManager->manageHeaters();
-        
-        // CRITICAL: Call MQTT loop after sensor reading
-        if (thingsBoard) {
-            thingsBoard->loop();
-        }
     }
     
-    // Send data to ThingsBoard via MQTT Gateway (now every 5 seconds)
+    // Send data to ThingsBoard via MQTT Gateway
     if (thingsBoard && thingsBoard->isSendDue()) {
-        Serial.println("\n[Cloud] Uploading real-time data via MQTT Gateway...");
+        // Remove the "Uploading..." message to reduce console spam
         if (thingsBoard->sendSensorData(*sensorManager)) {
-            Serial.println("[Cloud] ✓ Data successfully uploaded via MQTT");
-            
-            // Show timestamp info
-            if (thingsBoard->isTimeSync()) {
-                unsigned long long ts = thingsBoard->getEpochMillis();
-                Serial.printf("[Cloud] Timestamp: %llu (Unix epoch ms)\n", ts);
-            } else {
-                Serial.println("[Cloud] ⚠ Using millis() timestamp - time not synced");
-            }
-        } else {
-            Serial.println("[Cloud] ✗ Upload failed: " + thingsBoard->getLastError());
+            // Success logging is handled inside sendSensorData
         }
+        // Failure logging is also handled inside sendSensorData
     }
     
     // Display data at intervals
@@ -605,7 +607,7 @@ void loop() {
                      sensorManager->getAverageTemperature(), 
                      sensorManager->getAverageHumidity());
         
-        // ADD SDP810 STATUS
+        // SDP810 STATUS
         if (sdp810Verified) {
             Serial.println("  SDP810: ✓ Verified and active");
         } else if (sensorManager->isSDPActive()) {
@@ -614,29 +616,26 @@ void loop() {
             Serial.println("  SDP810: ✗ Not detected");
         }
         
-        // Show I2C bus status
-        Serial.println("  Main Bus (21/22): SDP810, SCD40, SHT31, SFA30 #1, SGP41 #1");
-        Serial.println("  Alt Bus (25/26):  SFA30 #2, SGP41 #2");
-        
         // Show WiFi and MQTT status
         if (thingsBoard) {
             Serial.println("  WiFi: " + thingsBoard->getWiFiStatus());
             Serial.println("  Time Sync: " + String(thingsBoard->isTimeSync() ? "YES" : "NO"));
             
-            if (thingsBoard->isMQTTConnected()) {
-                Serial.println("  MQTT: Connected (Real-time)");
+            // Check actual MQTT connection state
+            if (thingsBoard->isMQTTConnected()) {  // CORRECTED: Use public method
+                Serial.println("  MQTT: Connected (Persistent)");
                 
                 // Calculate next cloud upload time
                 unsigned long timeSinceLastSend = now - thingsBoard->getLastSendTime();
                 if (timeSinceLastSend < tbConfig.sendInterval) {
                     unsigned long timeToNextSend = tbConfig.sendInterval - timeSinceLastSend;
-                    Serial.printf("  Next MQTT upload: %.1f seconds\n", timeToNextSend / 1000.0);
+                    Serial.printf("  Next upload: %.1f seconds\n", timeToNextSend / 1000.0);
                 } else {
-                    Serial.println("  MQTT upload: Ready");
+                    Serial.println("  Next upload: Ready");
                 }
             } else {
-                Serial.println("  MQTT: DISCONNECTED");
-                Serial.println("  Cloud upload: Disabled");
+                Serial.println("  MQTT: Disconnected");
+                Serial.println("  Next upload: Will reconnect");
             }
         } else {
             Serial.println("  System: Offline mode");

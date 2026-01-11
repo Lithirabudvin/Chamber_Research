@@ -13,17 +13,21 @@ struct ThingsBoardConfig {
     String gatewayToken;
     String wifiSSID;
     String wifiPassword;
-    unsigned long sendInterval = 5000;  // Changed to 5 seconds for more real-time updates
+    unsigned long sendInterval = 5000;  // 5 seconds for real-time updates
     
     // MQTT options
     bool useSSL = false;
-    const char* mqttUsername = nullptr;  // Usually null for ThingsBoard
-    const char* mqttPassword = nullptr;  // Usually null for ThingsBoard
+    const char* mqttUsername = nullptr;
+    const char* mqttPassword = nullptr;
     
-    // NTP Configuration for accurate timestamps
+    // NTP Configuration
     const char* ntpServer = "pool.ntp.org";
-    long gmtOffset_sec = 0;  // Set according to your timezone (e.g., 19800 for IST +5:30)
+    long gmtOffset_sec = 0;
     int daylightOffset_sec = 0;
+    
+    // Persistent MQTT options (NEW)
+    bool persistentSession = true;
+    String clientId = "";  // If empty, will use MAC-based ID
 };
 
 class ThingsBoardClient {
@@ -60,8 +64,10 @@ private:
     bool _wifiConnected = false;
     bool _mqttConnected = false;
     bool _timeSynced = false;
+    bool _devicesConnected = false;  // NEW: Track if devices are already connected
     String _lastError;
     int _failCount = 0;
+    String _clientId;  // NEW: Persistent client ID
     
     bool _syncTime();
     bool _checkWiFiConnection();
@@ -69,6 +75,7 @@ private:
     bool _sendGatewayTelemetryMQTT(const SensorManager& sensorManager);
     bool _connectDevicesToGateway();
     bool _connectDeviceToGateway(const String& deviceName);
-    void _addGatewaySensorData(JsonDocument& doc, const SensorManager& sensorManager);  // ADD THIS
+    void _addGatewaySensorData(JsonDocument& doc, const SensorManager& sensorManager);
     void _mqttCallback(char* topic, byte* payload, unsigned int length);
+    String _generateClientId();  // NEW: Generate persistent client ID
 };

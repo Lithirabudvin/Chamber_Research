@@ -2,19 +2,37 @@
 
 // Constructor with Config struct
 ThingsBoardClient::ThingsBoardClient(const ThingsBoardConfig& config) 
-    : _mqttClient(_wifiClient) {  // Initialize with WiFiClient
+    : _mqttClient(_wifiClient) {
     _config = config;
     _sendInterval = config.sendInterval;
+    
+    // Generate persistent client ID
+    if (_config.clientId.length() > 0) {
+        _clientId = _config.clientId;
+    } else {
+        _clientId = _generateClientId();
+    }
 }
 
 // Original constructor (for backward compatibility)
 ThingsBoardClient::ThingsBoardClient(const char* serverUrl, const char* gatewayToken, 
                                      const char* wifiSSID, const char* wifiPassword) 
-    : _mqttClient(_wifiClient) {  // Initialize with WiFiClient
+    : _mqttClient(_wifiClient) {
     _config.serverUrl = serverUrl;
     _config.gatewayToken = gatewayToken;
     _config.wifiSSID = wifiSSID;
     _config.wifiPassword = wifiPassword;
+    _clientId = _generateClientId();  // Generate client ID
+}
+
+String ThingsBoardClient::_generateClientId() {
+    // Use MAC address for persistent client ID
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char macStr[18];
+    snprintf(macStr, sizeof(macStr), "%02X%02X%02X%02X%02X%02X", 
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    return String("ESP32Gateway_") + macStr;
 }
 
 bool ThingsBoardClient::begin() {
@@ -23,6 +41,7 @@ bool ThingsBoardClient::begin() {
     WiFi.persistent(true);
     
     Serial.printf("[WiFi] SSID: '%s'\n", _config.wifiSSID.c_str());
+    Serial.printf("[MQTT] Client ID: %s\n", _clientId.c_str());
     
     if (!connectWiFi()) {
         return false;
@@ -39,7 +58,7 @@ bool ThingsBoardClient::begin() {
         Serial.println("[NTP] ✗ Time sync failed - timestamps will be inaccurate");
     }
     
-    // Setup MQTT client based on SSL configuration
+    // Setup MQTT client
     if (_config.useSSL) {
         _wifiClientSecure.setInsecure();
         _mqttClient.setClient(_wifiClientSecure);
@@ -76,20 +95,20 @@ bool ThingsBoardClient::connectWiFi() {
         return false;
     }
     
-    // Disconnect first to ensure clean start
+    // Only disconnect if we need to
     WiFi.disconnect(true);
     delay(100);
     
     WiFi.begin(_config.wifiSSID.c_str(), _config.wifiPassword.c_str());
     
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    while (WiFi.status() != WL_CONNECTED && attempts < 30) {  // Increased attempts
         delay(500);
         Serial.print(".");
         attempts++;
         
         if (attempts % 10 == 0) {
-            Serial.printf("\n[WiFi] Attempt %d/20\n", attempts);
+            Serial.printf("\n[WiFi] Attempt %d/30\n", attempts);
         }
     }
     
@@ -106,6 +125,8 @@ bool ThingsBoardClient::connectWiFi() {
         return false;
     }
 }
+
+// Add this function in ThingsBoard.cpp (around line 130 in your code)
 
 bool ThingsBoardClient::_syncTime() {
     // Configure time
@@ -138,33 +159,31 @@ unsigned long long ThingsBoardClient::getEpochMillis() {
     return millisecondsSinceEpoch;
 }
 
+
 bool ThingsBoardClient::connectMQTT() {
+    // Don't reconnect if already connected
+    if (_mqttClient.connected()) {
+        return true;
+    }
+    
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("[MQTT] Cannot connect: WiFi not connected");
         return false;
     }
     
     Serial.println("[MQTT] Connecting to broker: " + _config.serverUrl + ":" + String(_config.serverPort));
-    
-    // Generate client ID
-    String clientId = "ESP32Gateway_" + String(random(0xffff), HEX);
+    Serial.println("[MQTT] Using Client ID: " + _clientId);
     
     // Set last will and testament
     String lastWillTopic = "v1/gateway/disconnect";
-    String lastWillMessage = "{\"device\":\"Gateway\"}";
+    String lastWillMessage = "{\"device\":\"Gateway\",\"clientId\":\"" + _clientId + "\"}";
     
-    // Clear any existing connection state
-    if (_mqttClient.connected()) {
-        _mqttClient.disconnect();
-        delay(100);
-    }
-    
-    // Connect to MQTT broker
+    // Connect with persistent client ID
     bool connected = false;
     
     if (_config.mqttUsername && _config.mqttPassword) {
         connected = _mqttClient.connect(
-            clientId.c_str(),
+            _clientId.c_str(),  // Use persistent client ID
             _config.mqttUsername,
             _config.mqttPassword,
             lastWillTopic.c_str(),
@@ -174,7 +193,7 @@ bool ThingsBoardClient::connectMQTT() {
         );
     } else {
         connected = _mqttClient.connect(
-            clientId.c_str(),
+            _clientId.c_str(),  // Use persistent client ID
             _config.gatewayToken.c_str(),
             nullptr,
             lastWillTopic.c_str(),
@@ -186,30 +205,35 @@ bool ThingsBoardClient::connectMQTT() {
     
     if (connected) {
         Serial.println("[MQTT] ✓ Connected successfully!");
-        Serial.println("  Client ID: " + clientId);
+        Serial.println("  Client ID: " + _clientId);
+        Serial.println("  Session: " + String(_config.persistentSession ? "Persistent" : "Temporary"));
         
-        // Subscribe to attribute updates
-        String attributeTopic = "v1/gateway/attributes";
-        if (_mqttClient.subscribe(attributeTopic.c_str())) {
-            Serial.println("[MQTT] ✓ Subscribed to: " + attributeTopic);
-        } else {
-            Serial.println("[MQTT] ✗ Failed to subscribe to: " + attributeTopic);
-        }
-        
-        // Subscribe to RPC requests
-        String rpcTopic = "v1/gateway/rpc";
-        if (_mqttClient.subscribe(rpcTopic.c_str())) {
-            Serial.println("[MQTT] ✓ Subscribed to: " + rpcTopic);
-        } else {
-            Serial.println("[MQTT] ✗ Failed to subscribe to: " + rpcTopic);
+        // Only subscribe and connect devices on first connection
+        if (!_devicesConnected) {
+            // Subscribe to attribute updates
+            String attributeTopic = "v1/gateway/attributes";
+            if (_mqttClient.subscribe(attributeTopic.c_str())) {
+                Serial.println("[MQTT] ✓ Subscribed to: " + attributeTopic);
+            } else {
+                Serial.println("[MQTT] ✗ Failed to subscribe to: " + attributeTopic);
+            }
+            
+            // Subscribe to RPC requests
+            String rpcTopic = "v1/gateway/rpc";
+            if (_mqttClient.subscribe(rpcTopic.c_str())) {
+                Serial.println("[MQTT] ✓ Subscribed to: " + rpcTopic);
+            } else {
+                Serial.println("[MQTT] ✗ Failed to subscribe to: " + rpcTopic);
+            }
+            
+            // Connect all devices to gateway (ONLY ONCE!)
+            _connectDevicesToGateway();
+            _devicesConnected = true;
         }
         
         // Process initial messages
         _mqttClient.loop();
-        delay(100);
-        
-        // Connect all devices to gateway
-        _connectDevicesToGateway();
+        delay(50);
         
         _mqttConnected = true;
         return true;
@@ -222,52 +246,53 @@ bool ThingsBoardClient::connectMQTT() {
 }
 
 bool ThingsBoardClient::sendSensorData(const SensorManager& sensorManager) {
-    // Check connection first
-    if (!_checkWiFiConnection()) {
-        _lastError = "WiFi not connected";
-        return false;
-    }
-    
-    if (!_checkMQTTConnection()) {
-        _lastError = "MQTT not connected";
-        return false;
-    }
-    
-    // Resync time periodically (every hour)
-    static unsigned long lastTimeSync = 0;
-    if (millis() - lastTimeSync > 3600000) {  // 1 hour
-        if (_syncTime()) {
-            Serial.println("[NTP] ✓ Time re-synchronized");
-        }
-        lastTimeSync = millis();
-    }
-    
-    // Process any pending MQTT messages
+    // First, always process MQTT messages to keep connection alive
     _mqttClient.loop();
     
-    // Send data using MQTT Gateway API
+    // Check if we have a valid connection
+    if (!_mqttClient.connected()) {
+        // Try to reconnect quietly (no console spam)
+        if (!_checkMQTTConnection()) {
+            _lastError = "MQTT not connected";
+            return false;
+        }
+    }
+    
+    // Ensure gateway devices are connected
+    if (!_devicesConnected) {
+        _lastError = "Gateway devices not connected";
+        return false;
+    }
+    
+    // Send data
     bool success = _sendGatewayTelemetryMQTT(sensorManager);
     
     if (success) {
         _lastSendTime = millis();
         _failCount = 0;
-        Serial.println("[Cloud] ✓ Gateway data sent successfully via MQTT");
+        // Minimal logging to reduce serial traffic
+        static unsigned long lastSuccessLog = 0;
+        if (millis() - lastSuccessLog > 10000) {  // Log every 10 seconds
+            lastSuccessLog = millis();
+            Serial.println("[Cloud] ✓ Data sent successfully via MQTT");
+        }
     } else {
         _failCount++;
         Serial.println("[Cloud] ✗ Failed: " + _lastError);
         
         if (_failCount >= 3) {
-            Serial.println("[Cloud] Multiple failures, reconnecting MQTT...");
+            Serial.println("[Cloud] Multiple failures, reconnecting...");
             _failCount = 0;
+            // Force reconnect on multiple failures
             _mqttClient.disconnect();
-            _mqttConnected = false;
-            delay(500);
-            connectMQTT();
+            delay(100);
+            _checkMQTTConnection();
         }
     }
     
     return success;
 }
+
 
 bool ThingsBoardClient::isSendDue() const {
     return millis() - _lastSendTime >= _sendInterval;
@@ -281,16 +306,18 @@ String ThingsBoardClient::getWiFiStatus() const {
 }
 
 void ThingsBoardClient::loop() {
-    // Process MQTT messages
-    _mqttClient.loop();
-    
-    // Check WiFi periodically
-    static unsigned long lastWiFiCheck = 0;
-    unsigned long now = millis();
-    
-    if (now - lastWiFiCheck > 10000) { // Check every 10 seconds
-        lastWiFiCheck = now;
-        _checkWiFiConnection();
+    // This is CRITICAL - must be called frequently to maintain connection
+    if (_mqttClient.connected()) {
+        _mqttClient.loop();
+    } else {
+        // Only try to reconnect occasionally
+        static unsigned long lastConnectionCheck = 0;
+        unsigned long now = millis();
+        
+        if (now - lastConnectionCheck > 10000) {  // Check every 10 seconds
+            lastConnectionCheck = now;
+            _checkMQTTConnection();
+        }
     }
 }
 
@@ -307,21 +334,29 @@ bool ThingsBoardClient::_checkWiFiConnection() {
 }
 
 bool ThingsBoardClient::_checkMQTTConnection() {
-    if (!_mqttClient.connected()) {
-        _mqttConnected = false;
-        
-        // Check WiFi first
-        if (!_checkWiFiConnection()) {
-            return false;
-        }
-        
-        // Try to reconnect
-        Serial.println("[MQTT] Attempting to reconnect...");
-        return connectMQTT();
+    // If already connected, just return true
+    if (_mqttClient.connected()) {
+        return true;
     }
     
-    _mqttConnected = true;
-    return true;
+    // Don't reconnect too frequently
+    static unsigned long lastReconnectAttempt = 0;
+    unsigned long now = millis();
+    
+    if (now - lastReconnectAttempt < 30000) {  // Wait 30 seconds between attempts
+        return false;
+    }
+    
+    lastReconnectAttempt = now;
+    
+    // Only reconnect if WiFi is connected
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[MQTT] Cannot reconnect: WiFi not connected");
+        return false;
+    }
+    
+    Serial.println("[MQTT] Reconnecting to broker...");
+    return connectMQTT();
 }
 
 bool ThingsBoardClient::_sendGatewayTelemetryMQTT(const SensorManager& sensorManager) {
@@ -344,16 +379,6 @@ bool ThingsBoardClient::_sendGatewayTelemetryMQTT(const SensorManager& sensorMan
     // Publish to MQTT topic
     const char* topic = "v1/gateway/telemetry";
     
-    Serial.println("[MQTT] Publishing to topic: " + String(topic));
-    Serial.println("[MQTT] Payload size: " + String(payload.length()) + " bytes");
-    
-    // Debug: Print first 500 chars of payload
-    if (payload.length() > 500) {
-        Serial.println("[MQTT] Payload preview: " + payload.substring(0, 500) + "...");
-    } else {
-        Serial.println("[MQTT] Payload: " + payload);
-    }
-    
     // Process any pending messages before publishing
     _mqttClient.loop();
     
@@ -364,11 +389,9 @@ bool ThingsBoardClient::_sendGatewayTelemetryMQTT(const SensorManager& sensorMan
     _mqttClient.loop();
     
     if (published) {
-        Serial.println("[MQTT] ✓ Published successfully");
         return true;
     } else {
         _lastError = "MQTT publish failed. State: " + String(_mqttClient.state());
-        Serial.println("[MQTT] ✗ Publish failed");
         return false;
     }
 }
@@ -376,7 +399,7 @@ bool ThingsBoardClient::_sendGatewayTelemetryMQTT(const SensorManager& sensorMan
 bool ThingsBoardClient::_connectDevicesToGateway() {
     Serial.println("[Gateway] Connecting devices to gateway via MQTT...");
     
-    // List of devices to connect (ADDED SDP810!)
+    // List of devices to connect
     const char* devices[] = {
         "SCD40(CO2)",
         "SGP41(TVOC)_IN",
@@ -387,7 +410,7 @@ bool ThingsBoardClient::_connectDevicesToGateway() {
         "PMS5003(PM2.5)_OUT",
         "SHT30(TEMP)_IN",
         "SHT30(TEMP)_OUT",
-        "SDP810(AIRFLOW)",  // <- ADDED THIS!
+        "SDP810(AIRFLOW)",
         "Gateway"
     };
     
@@ -403,7 +426,12 @@ bool ThingsBoardClient::_connectDevicesToGateway() {
             Serial.printf("[Gateway] ✗ %s connection failed\n", deviceName);
             allConnected = false;
         }
-        delay(100); // Increased delay for stability
+        delay(20);  // Reduced from 50ms to 20ms
+    }
+    
+    if (allConnected) {
+        Serial.println("[Gateway] ✓ All devices connected to gateway");
+        _devicesConnected = true;  // Set this flag only when ALL devices are connected
     }
     
     return allConnected;
@@ -428,37 +456,12 @@ bool ThingsBoardClient::_connectDeviceToGateway(const String& deviceName) {
     // Process messages after publishing
     _mqttClient.loop();
     
-    if (published) {
-        return true;
-    }
-    
-    return false;
+    return published;
 }
 
 void ThingsBoardClient::_mqttCallback(char* topic, byte* payload, unsigned int length) {
-    Serial.print("[MQTT] Message arrived [");
-    Serial.print(topic);
-    Serial.print("]: ");
-    
-    // Print payload
-    for (unsigned int i = 0; i < length; i++) {
-        Serial.print((char)payload[i]);
-    }
-    Serial.println();
-    
-    // Parse JSON if it's an attribute update or RPC request
-    if (String(topic) == "v1/gateway/attributes" || String(topic) == "v1/gateway/rpc") {
-        JsonDocument doc;
-        DeserializationError error = deserializeJson(doc, payload, length);
-        
-        if (!error) {
-            String device = doc["device"] | "Unknown";
-            Serial.println("[MQTT] Message for device: " + device);
-            
-            // Handle attribute updates or RPC requests here
-            // You can add custom logic to respond to server commands
-        }
-    }
+    // Optional: Add callback handling if needed
+    // Serial.printf("[MQTT] Message: %s\n", topic);
 }
 
 void ThingsBoardClient::_addGatewaySensorData(JsonDocument& doc, const SensorManager& sensorManager) {
@@ -469,7 +472,7 @@ void ThingsBoardClient::_addGatewaySensorData(JsonDocument& doc, const SensorMan
     if (!_timeSynced) {
         currentTs = millis();
         static unsigned long lastWarning = 0;
-        if (millis() - lastWarning > 60000) {  // Warn every minute
+        if (millis() - lastWarning > 60000) {
             Serial.println("[Warning] Time not synced - using millis() instead of Unix timestamp");
             lastWarning = millis();
         }
