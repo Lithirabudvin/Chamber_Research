@@ -71,7 +71,8 @@ bool ThingsBoardClient::begin() {
         this->_mqttCallback(topic, payload, length);
     });
     _mqttClient.setBufferSize(4096);
-    _mqttClient.setKeepAlive(30);
+    _mqttClient.setKeepAlive(120);
+     _mqttClient.setSocketTimeout(30);
     
     // Connect to MQTT
     if (!connectMQTT()) {
@@ -581,7 +582,6 @@ void ThingsBoardClient::_addGatewaySensorData(JsonDocument& doc, const SensorMan
         const SHT31::Data& d = sensorManager.getSHT1Data();
         values["temperature"] = d.temperature;
         values["humidity"] = d.humidity;
-        values["heater_enabled"] = d.heaterEnabled;
     }
     
     // 9. SHT31 #2 - Device: "SHT30(TEMP)_OUT"
@@ -594,7 +594,7 @@ void ThingsBoardClient::_addGatewaySensorData(JsonDocument& doc, const SensorMan
         const SHT31::Data& d = sensorManager.getSHT2Data();
         values["temperature"] = d.temperature;
         values["humidity"] = d.humidity;
-        values["heater_enabled"] = d.heaterEnabled;
+
     }
     
     // 10. SDP810 - Device: "SDP810(AIRFLOW)" <- ADDED THIS!

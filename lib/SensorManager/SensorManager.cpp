@@ -20,8 +20,6 @@ SensorManager::SensorManager(const I2CConfig& i2cConfig, const PMSConfig& pmsCon
       _sfaActive1(false), _sfaActive2(false),
       _sgpActive1(false), _sgpActive2(false),
       _shtActive1(false), _shtActive2(false),
-      _lastHeaterToggle1(0), _lastHeaterToggle2(0),
-      _shtHeaterEnabled1(false), _shtHeaterEnabled2(false),
       _lastMainBusRecovery(0), _lastAltBusRecovery(0) {
 }
 
@@ -130,15 +128,13 @@ bool SensorManager::begin() {
         }
     }
     
-    // Initialize SHT31 sensors
+    // Initialize SHT31 sensors (SIMPLIFIED - no heater management)
     Serial.println("\n[SHT31] Initializing...");
     for (int attempt = 1; attempt <= 2; attempt++) {
         _shtActive1 = _shtSensor1.begin();
         _shtActive2 = _shtSensor2.begin();
         
         if (_shtActive1 && _shtActive2) {
-            _shtSensor1.enableHeater(false);
-            _shtSensor2.enableHeater(false);
             Serial.println("  ✓ SHT31 #1 and #2 initialized");
             break;
         }
@@ -829,26 +825,6 @@ bool SensorManager::readSHT2() {
     }
     
     return result;
-}
-
-void SensorManager::manageHeaters() {
-    unsigned long now = millis();
-    
-    if (_shtActive1 && now - _lastHeaterToggle1 >= HEATER_INTERVAL) {
-        _lastHeaterToggle1 = now;
-        _shtHeaterEnabled1 = !_shtHeaterEnabled1;
-        _shtSensor1.enableHeater(_shtHeaterEnabled1);
-        _shtData1.heaterEnabled = _shtHeaterEnabled1;
-        Serial.printf("[SHT31 #1] Heater %s\n", _shtHeaterEnabled1 ? "ON" : "OFF");
-    }
-    
-    if (_shtActive2 && now - _lastHeaterToggle2 >= HEATER_INTERVAL) {
-        _lastHeaterToggle2 = now;
-        _shtHeaterEnabled2 = !_shtHeaterEnabled2;
-        _shtSensor2.enableHeater(_shtHeaterEnabled2);
-        _shtData2.heaterEnabled = _shtHeaterEnabled2;
-        Serial.printf("[SHT31 #2] Heater %s\n", _shtHeaterEnabled2 ? "ON" : "OFF");
-    }
 }
 
 bool SensorManager::isPMS1Responding() const {

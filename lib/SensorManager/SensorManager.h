@@ -45,9 +45,6 @@ public:
     bool readSHT1();
     bool readSHT2();
     
-    // Heater management for SHT31
-    void manageHeaters();
-    
     // Data access
     const PMS5003::Data& getPMS1Data() const { return _pmsData1; }
     const PMS5003::Data& getPMS2Data() const { return _pmsData2; }
@@ -129,13 +126,6 @@ private:
     bool _sgpActive2;
     bool _shtActive1;
     bool _shtActive2;
-    
-    // Heater management
-    unsigned long _lastHeaterToggle1;
-    unsigned long _lastHeaterToggle2;
-    bool _shtHeaterEnabled1;
-    bool _shtHeaterEnabled2;
-    const unsigned long HEATER_INTERVAL = 30000;
     
     // Error tracking
     const int MAX_ERRORS = 10;

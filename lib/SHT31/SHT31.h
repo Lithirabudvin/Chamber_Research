@@ -8,9 +8,7 @@ namespace SHT31 {
     struct Data {
         float temperature;   // °C
         float humidity;      // %RH
-        bool heaterEnabled;  // Heater status
-        bool valid;
-        int errorCount;
+        bool valid;          // Keep this for data validity
     };
 
     class Sensor {
@@ -19,9 +17,6 @@ namespace SHT31 {
         
         bool begin();
         bool readMeasurement(Data& data);
-        bool enableHeater(bool enable);
-        bool isHeaterEnabled() const;
-        bool reset();
         bool isInitialized() const { return _initialized; }
         
     private:

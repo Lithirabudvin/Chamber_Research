@@ -133,14 +133,6 @@ void printSensorStatus() {
     if (sensorManager->isSGP2Active() && sensorManager->getSGP2Data().conditioning) 
         Serial.print(" [CONDITIONING]");
     Serial.println();
-    Serial.printf("  SHT31 #1:   %s", sensorManager->isSHT1Active() ? "✓ ACTIVE" : "✗ INACTIVE");
-    if (sensorManager->isSHT1Active() && sensorManager->getSHT1Data().heaterEnabled) 
-        Serial.print(" [HEATER ON]");
-    Serial.println();
-    Serial.printf("  SHT31 #2:   %s", sensorManager->isSHT2Active() ? "✓ ACTIVE" : "✗ INACTIVE");
-    if (sensorManager->isSHT2Active() && sensorManager->getSHT2Data().heaterEnabled) 
-        Serial.print(" [HEATER ON]");
-    Serial.println();
     Serial.println("════════════════════════════════════════\n");
 }
 
@@ -318,11 +310,7 @@ void printSHTData(const SHT31::Data& data, int sensorNum) {
     
     Serial.printf("│ Abs. Humidity: %5.1f g/m³            │\n", absHumidity);
     
-    if (data.heaterEnabled) {
-        Serial.println("├──────────────────────────────────────┤");
-        Serial.println("│ Heater:        ON                    │");
-    }
-    
+
     Serial.println("├──────────────────────────────────────┤");
     Serial.printf("│ Temp Quality:  %-22s│\n", tempQuality.c_str());
     Serial.printf("│ Hum Quality:   %-22s│\n", humQuality.c_str());
@@ -539,7 +527,6 @@ void loop() {
     unsigned long now = millis();
     
     // CRITICAL: Call MQTT loop frequently for real-time operation
-    // This maintains the heartbeat and processes messages
     if (thingsBoard) {
         thingsBoard->loop();
     }
@@ -578,17 +565,14 @@ void loop() {
         sensorManager->readSHT1();
         sensorManager->readSHT2();
         
-        // Manage SHT31 heaters
-        sensorManager->manageHeaters();
+        // REMOVED: sensorManager->manageHeaters();
     }
     
     // Send data to ThingsBoard via MQTT Gateway
     if (thingsBoard && thingsBoard->isSendDue()) {
-        // Remove the "Uploading..." message to reduce console spam
         if (thingsBoard->sendSensorData(*sensorManager)) {
             // Success logging is handled inside sendSensorData
         }
-        // Failure logging is also handled inside sendSensorData
     }
     
     // Display data at intervals
