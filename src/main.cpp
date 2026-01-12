@@ -5,7 +5,7 @@
 // Configuration
 const char* WIFI_SSID = "ABC";
 const char* WIFI_PASSWORD = "zzom5037";
-const char* GATEWAY_TOKEN = "cqb5Xa3H3SkJPJ1NhXtk";
+const char* GATEWAY_TOKEN = "L3Cb5X4f6vdFU3KF6Pcc";
 
 // Global variables
 bool sdp810Verified = false;
