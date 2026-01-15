@@ -3,8 +3,8 @@
 #include "ThingsBoard.h"
 
 // Configuration
-const char* WIFI_SSID = "ABC";
-const char* WIFI_PASSWORD = "zzom5037";
+const char* WIFI_SSID = "MAGICBITERS";
+const char* WIFI_PASSWORD = "nevergiveup";
 const char* GATEWAY_TOKEN = "L3Cb5X4f6vdFU3KF6Pcc";
 
 // Global variables

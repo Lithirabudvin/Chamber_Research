@@ -22,8 +22,16 @@ namespace SFA30 {
         bool readMeasurement(Data& data);
         bool getDeviceMarking(char* deviceMarking, size_t size);
         bool reset();
+        bool softReset();      // New: Gentle recovery
+        bool hardReset();      // New: Complete reinitialization
+        
         bool isInitialized() const { return _initialized; }
         bool isMeasurementStarted() const { return _measurementStarted; }
+        int getErrorCount() const { return _errorCount; }
+        int getConsecutiveZeros() const { return _consecutiveZeros; }
+        unsigned long getTimeSinceLastSuccess() const { 
+            return _lastSuccessfulRead > 0 ? millis() - _lastSuccessfulRead : 0; 
+        }
         
     private:
         SensirionI2cSfa3x _sfa;
@@ -31,6 +39,8 @@ namespace SFA30 {
         uint8_t _address;
         bool _initialized;
         bool _measurementStarted;
-        int _errorCount = 0;
+        int _errorCount;
+        int _consecutiveZeros;
+        unsigned long _lastSuccessfulRead;
     };
 }

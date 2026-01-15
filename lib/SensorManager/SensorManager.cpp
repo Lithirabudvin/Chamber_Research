@@ -5,13 +5,15 @@ SensorManager::SensorManager(const I2CConfig& i2cConfig, const PMSConfig& pmsCon
       _pmsSensor1(Serial2, pmsConfig.rxPin1, pmsConfig.txPin1),
       _pmsSensor2(Serial1, pmsConfig.rxPin2, pmsConfig.txPin2),
       // Main bus sensors (Wire - pins 21/22)
-      _sdpSensor(Wire, 0x25),
+      
       _scdSensor(Wire, 0x62),
       _sfaSensor1(Wire, 0x5D),
       _sgpSensor1(Wire, 0x59),
       _shtSensor1(Wire, 0x44),
-      _shtSensor2(Wire, 0x45),
+      
       // Alternate bus sensors (Wire1 - pins 25/26)
+      _shtSensor2(_altWire, 0x44),
+      _sdpSensor(_altWire, 0x25),
       _sfaSensor2(_altWire, 0x5D),
       _sgpSensor2(_altWire, 0x59),
       _altWire(1),  // Wire1 instance
