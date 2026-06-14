@@ -308,6 +308,7 @@ String ThingsBoardClient::getWiFiStatus() const {
 
 void ThingsBoardClient::loop() {
     // This is CRITICAL - must be called frequently to maintain connection
+    _checkWiFiConnection(); 
     if (_mqttClient.connected()) {
         _mqttClient.loop();
     } else {

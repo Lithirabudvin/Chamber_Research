@@ -3,8 +3,8 @@
 #include "ThingsBoard.h"
 
 // Configuration
-const char* WIFI_SSID = "MAGICBITERS";
-const char* WIFI_PASSWORD = "nevergiveup";
+const char* WIFI_SSID = "CHAMBER";
+const char* WIFI_PASSWORD = "thilina1234";
 const char* GATEWAY_TOKEN = "L3Cb5X4f6vdFU3KF6Pcc";
 
 // Global variables
@@ -440,10 +440,10 @@ void setup() {
     // Configure ThingsBoard
     tbConfig.serverUrl = "cloud.thingsnode.cc";
     tbConfig.serverPort = 1883;
-    tbConfig.gatewayToken = GATEWAY_TOKEN;
-    tbConfig.wifiSSID = WIFI_SSID;
-    tbConfig.wifiPassword = WIFI_PASSWORD;
-    tbConfig.sendInterval = 15000;  // 15 seconds is fine for most applications
+    tbConfig.gatewayToken = "L3Cb5X4f6vdFU3KF6Pcc";
+    tbConfig.wifiSSID = "CHAMBER";
+    tbConfig.wifiPassword = "thilina1234";
+    tbConfig.sendInterval = 30000;  // 30 seconds is fine for most applications
     tbConfig.useSSL = false;
     tbConfig.gmtOffset_sec = 19800;
     tbConfig.daylightOffset_sec = 0;

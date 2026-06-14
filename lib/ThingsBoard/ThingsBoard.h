@@ -13,7 +13,7 @@ struct ThingsBoardConfig {
     String gatewayToken;
     String wifiSSID;
     String wifiPassword;
-    unsigned long sendInterval = 5000;  // 5 seconds for real-time updates
+    unsigned long sendInterval = 30000;  // 5 seconds for real-time updates
     
     // MQTT options
     bool useSSL = false;
@@ -54,7 +54,7 @@ public:
     
 private:
     ThingsBoardConfig _config;
-    unsigned long _sendInterval = 5000;
+    unsigned long _sendInterval = 30000;
     
     WiFiClient _wifiClient;
     WiFiClientSecure _wifiClientSecure;
