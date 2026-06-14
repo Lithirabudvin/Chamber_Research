@@ -520,6 +520,7 @@ Serial.println("\n[System] Initializing WiFi and MQTT Gateway...");
 void loop() {
     static bool sdpOk = false;
     static unsigned long lastReadTime = 0;
+    static unsigned long lastReadTimeSGP = 0;
     static unsigned long lastSDP810SimpleRead = 0;
     
     if (!sensorManager) return;
@@ -560,14 +561,19 @@ void loop() {
         sensorManager->readSCD();
         sensorManager->readSFA1();
         sensorManager->readSFA2();
-        sensorManager->readSGP1();
-        sensorManager->readSGP2();
         sensorManager->readSHT1();
         sensorManager->readSHT2();
         
         // REMOVED: sensorManager->manageHeaters();
     }
     
+    if (now - lastReadTimeSGP >= 1000) {
+        lastReadTimeSGP = now;
+        sensorManager->readSGP1();
+        sensorManager->readSGP2();
+    }
+    
+
     // Send data to ThingsBoard via MQTT Gateway
     if (thingsBoard && thingsBoard->isSendDue()) {
         if (thingsBoard->sendSensorData(*sensorManager)) {
