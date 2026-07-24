@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "SensorManager.h"
 #include "ThingsBoard.h"
+#include "esp_task_wdt.h" 
 
 // Configuration
 const char* WIFI_SSID = "CHAMBER";
@@ -138,66 +139,66 @@ void printSensorStatus() {
 
 void printPMSData(const PMS5003::Data& data, int sensorNum) {
     if (!data.valid) {
-        Serial.printf("[PMS5003 #%d] No valid data\n", sensorNum);
+        // Serial.printf("[PMS5003 #%d] No valid data\n", sensorNum);
         return;
     }
     
-    Serial.printf("┌────────────── PM SENSOR #%d ──────────────┐\n", sensorNum);
-    Serial.printf("│ PM1.0:  %3d μg/m³                     │\n", data.pm10_standard);
-    Serial.printf("│ PM2.5:  %3d μg/m³                     │\n", data.pm25_standard);
-    Serial.printf("│ PM10:   %3d μg/m³                     │\n", data.pm100_standard);
+    // Serial.printf("┌────────────── PM SENSOR #%d ──────────────┐\n", sensorNum);
+    // Serial.printf("│ PM1.0:  %3d μg/m³                     │\n", data.pm10_standard);
+    // Serial.printf("│ PM2.5:  %3d μg/m³                     │\n", data.pm25_standard);
+    // Serial.printf("│ PM10:   %3d μg/m³                     │\n", data.pm100_standard);
     
     // Additional PM data if available
     if (data.pm10_env > 0 || data.pm25_env > 0 || data.pm100_env > 0) {
-        Serial.println("├───────────── Environmental ──────────────┤");
-        Serial.printf("│ PM1.0 (env): %3d μg/m³              │\n", data.pm10_env);
-        Serial.printf("│ PM2.5 (env): %3d μg/m³              │\n", data.pm25_env);
-        Serial.printf("│ PM10 (env):  %3d μg/m³              │\n", data.pm100_env);
+        // Serial.println("├───────────── Environmental ──────────────┤");
+        // Serial.printf("│ PM1.0 (env): %3d μg/m³              │\n", data.pm10_env);
+        // Serial.printf("│ PM2.5 (env): %3d μg/m³              │\n", data.pm25_env);
+        // Serial.printf("│ PM10 (env):  %3d μg/m³              │\n", data.pm100_env);
     }
     
-    Serial.println("└──────────────────────────────────────┘");
+    // Serial.println("└──────────────────────────────────────┘");
 }
 
 void printSDPData(const SDP810::Data& data) {
     if (!data.valid) {
-        Serial.println("[SDP810] No valid data");
+        // Serial.println("[SDP810] No valid data");
         return;
     }
     
-    Serial.println("┌────────────── AIR FLOW ───────────────┐");
-    Serial.printf("│ Pressure: %+7.2f Pa                 │\n", data.differential_pressure);
-    Serial.printf("│ Temp:     %7.2f °C                 │\n", data.temperature);
-    Serial.printf("│ Flow:     %7.4f m³/s              │\n", data.air_flow);
-    Serial.printf("│ Velocity: %7.2f m/s                │\n", data.air_velocity);
+    // Serial.println("┌────────────── AIR FLOW ───────────────┐");
+    // Serial.printf("│ Pressure: %+7.2f Pa                 │\n", data.differential_pressure);
+    // Serial.printf("│ Temp:     %7.2f °C                 │\n", data.temperature);
+    // Serial.printf("│ Flow:     %7.4f m³/s              │\n", data.air_flow);
+    // Serial.printf("│ Velocity: %7.2f m/s                │\n", data.air_velocity);
     
-    Serial.println("├──────────── Interpretation ───────────┤");
+    // Serial.println("├──────────── Interpretation ───────────┤");
     if (abs(data.differential_pressure) < 1.0) {
-        Serial.println("│ Status:   No significant air flow    │");
+        // Serial.println("│ Status:   No significant air flow    │");
     } else if (data.differential_pressure > 0) {
-        Serial.printf("│ Direction: Forward (+)%16s│\n", "");
+        // Serial.printf("│ Direction: Forward (+)%16s│\n", "");
     } else {
-        Serial.printf("│ Direction: Reverse (-)%16s│\n", "");
+        // Serial.printf("│ Direction: Reverse (-)%16s│\n", "");
     }
-    Serial.println("└──────────────────────────────────────┘");
+    // Serial.println("└──────────────────────────────────────┘");
 }
 
 void printSCDData(const SCD40::Data& data) {
     if (!data.valid) {
-        Serial.println("[SCD40] No valid data yet");
+        // Serial.println("[SCD40] No valid data yet");
         return;
     }
     
     String quality = getCO2Quality(data.co2);
     String recommendation = getCO2Recommendation(data.co2);
     
-    Serial.println("┌────────────── CO₂ SENSOR ──────────────┐");
-    Serial.printf("│ CO₂:         %5d ppm               │\n", data.co2);
-    Serial.printf("│ Temperature:   %5.1f °C              │\n", data.temperature);
-    Serial.printf("│ Humidity:      %5.1f %%               │\n", data.humidity);
-    Serial.println("├──────────────────────────────────────┤");
-    Serial.printf("│ Quality:       %-22s│\n", quality.c_str());
-    Serial.printf("│ Action:        %-22s│\n", recommendation.c_str());
-    Serial.println("└──────────────────────────────────────┘");
+    // Serial.println("┌────────────── CO₂ SENSOR ──────────────┐");
+    // Serial.printf("│ CO₂:         %5d ppm               │\n", data.co2);
+    // Serial.printf("│ Temperature:   %5.1f °C              │\n", data.temperature);
+    // Serial.printf("│ Humidity:      %5.1f %%               │\n", data.humidity);
+    // Serial.println("├──────────────────────────────────────┤");
+    // Serial.printf("│ Quality:       %-22s│\n", quality.c_str());
+    // Serial.printf("│ Action:        %-22s│\n", recommendation.c_str());
+    // Serial.println("└──────────────────────────────────────┘");
 }
 
 String getHCHOHealthRisk(float hcho_ppb) {
@@ -212,33 +213,33 @@ String getHCHOHealthRisk(float hcho_ppb) {
 
 void printSFAData(const SFA30::Data& data, int sensorNum) {
     if (!data.valid) {
-        Serial.printf("[SFA30 #%d] No valid data\n", sensorNum);
+        // Serial.printf("[SFA30 #%d] No valid data\n", sensorNum);
         return;
     }
     
     // Don't skip zeros - show warning but still display
     if (data.formaldehyde == 0.0 && data.temperature == 0.0 && data.humidity == 0.0) {
-        Serial.printf("[SFA30 #%d] ⚠️  Sensor returning zeros - may be disconnected\n", sensorNum);
+        // Serial.printf("[SFA30 #%d] ⚠️  Sensor returning zeros - may be disconnected\n", sensorNum);
         return;
     }
     
     String quality = getHCHOQuality(data.formaldehyde);
     String healthRisk = getHCHOHealthRisk(data.formaldehyde);
     
-    Serial.printf("┌────────────── HCHO SENSOR #%d ─────────────┐\n", sensorNum);
-    Serial.printf("│ HCHO:      %8.1f ppb              │\n", data.formaldehyde);
-    Serial.printf("│            %8.3f ppm              │\n", data.formaldehyde / 1000.0);
-    Serial.printf("│ Temperature:   %5.1f °C              │\n", data.temperature);
-    Serial.printf("│ Humidity:      %5.1f %%               │\n", data.humidity);
-    Serial.println("├──────────────────────────────────────┤");
-    Serial.printf("│ Quality:       %-22s│\n", quality.c_str());
-    Serial.printf("│ Health Risk:   %-22s│\n", healthRisk.c_str());
+    // Serial.printf("┌────────────── HCHO SENSOR #%d ─────────────┐\n", sensorNum);
+    // Serial.printf("│ HCHO:      %8.1f ppb              │\n", data.formaldehyde);
+    // Serial.printf("│            %8.3f ppm              │\n", data.formaldehyde / 1000.0);
+    // Serial.printf("│ Temperature:   %5.1f °C              │\n", data.temperature);
+    // Serial.printf("│ Humidity:      %5.1f %%               │\n", data.humidity);
+    // Serial.println("├──────────────────────────────────────┤");
+    // Serial.printf("│ Quality:       %-22s│\n", quality.c_str());
+    // Serial.printf("│ Health Risk:   %-22s│\n", healthRisk.c_str());
     
     // Show WHO comparison for high readings
     if (data.formaldehyde > 80) {
         float who_limit = 80.0; // ppb
         float ratio = data.formaldehyde / who_limit;
-        Serial.printf("│ WHO Limit:     %.1fx EXCEEDED           │\n", ratio);
+        // Serial.printf("│ WHO Limit:     %.1fx EXCEEDED           │\n", ratio);
     }
     
     // Show trend indicator if you want (optional)
@@ -250,46 +251,46 @@ void printSFAData(const SFA30::Data& data, int sensorNum) {
         float change = data.formaldehyde - *lastReading;
         if (abs(change) > 10) { // Only show if significant change
             if (change > 0) {
-                Serial.printf("│ Trend:         ↑ Rising (+%.0f ppb)       │\n", change);
+                // Serial.printf("│ Trend:         ↑ Rising (+%.0f ppb)       │\n", change);
             } else {
-                Serial.printf("│ Trend:         ↓ Falling (%.0f ppb)      │\n", change);
+                // Serial.printf("│ Trend:         ↓ Falling (%.0f ppb)      │\n", change);
             }
         }
     }
     *lastReading = data.formaldehyde;
     
-    Serial.println("└──────────────────────────────────────┘");
+    // Serial.println("└──────────────────────────────────────┘");
 }
 
 void printSGPData(const SGP41::Data& data, int sensorNum) {
     if (!data.valid) {
-        Serial.printf("[SGP41 #%d] No valid data\n", sensorNum);
+        // Serial.printf("[SGP41 #%d] No valid data\n", sensorNum);
         return;
     }
     
     String vocQuality = getVOCQuality(data.vocIndex);
     String noxQuality = getNOxQuality(data.noxIndex);
     
-    Serial.printf("┌────────────── VOC/NOx #%d ─────────────┐\n", sensorNum);
-    Serial.printf("│ VOC:         %6d (raw)           │\n", data.voc);
-    Serial.printf("│ VOC Index:   %6.0f                │\n", data.vocIndex);
-    Serial.printf("│ NOx:         %6d (raw)           │\n", data.nox);
-    Serial.printf("│ NOx Index:   %6.1f                │\n", data.noxIndex);
+    // Serial.printf("┌────────────── VOC/NOx #%d ─────────────┐\n", sensorNum);
+    // Serial.printf("│ VOC:         %6d (raw)           │\n", data.voc);
+    // Serial.printf("│ VOC Index:   %6.0f                │\n", data.vocIndex);
+    // Serial.printf("│ NOx:         %6d (raw)           │\n", data.nox);
+    // Serial.printf("│ NOx Index:   %6.1f                │\n", data.noxIndex);
     
     if (data.conditioning) {
-        Serial.println("├──────────────────────────────────────┤");
-        Serial.println("│ Status:      CONDITIONING (10m)      │");
+        // Serial.println("├──────────────────────────────────────┤");
+        // Serial.println("│ Status:      CONDITIONING (10m)      │");
     }
     
-    Serial.println("├──────────────────────────────────────┤");
-    Serial.printf("│ VOC Quality:   %-22s│\n", vocQuality.c_str());
-    Serial.printf("│ NOx Quality:   %-22s│\n", noxQuality.c_str());
-    Serial.println("└──────────────────────────────────────┘");
+    // Serial.println("├──────────────────────────────────────┤");
+    // Serial.printf("│ VOC Quality:   %-22s│\n", vocQuality.c_str());
+    // Serial.printf("│ NOx Quality:   %-22s│\n", noxQuality.c_str());
+    // Serial.println("└──────────────────────────────────────┘");
 }
 
 void printSHTData(const SHT31::Data& data, int sensorNum) {
     if (!data.valid) {
-        Serial.printf("[SHT31 #%d] No valid data\n", sensorNum);
+        // Serial.printf("[SHT31 #%d] No valid data\n", sensorNum);
         return;
     }
     
@@ -299,35 +300,35 @@ void printSHTData(const SHT31::Data& data, int sensorNum) {
     float heatIndex = calculateHeatIndex(data.temperature, data.humidity);
     float absHumidity = calculateAbsoluteHumidity(data.temperature, data.humidity);
     
-    Serial.printf("┌──────────── ENVIRONMENT #%d ───────────┐\n", sensorNum);
-    Serial.printf("│ Temperature:   %5.1f °C              │\n", data.temperature);
-    Serial.printf("│ Humidity:      %5.1f %%               │\n", data.humidity);
-    Serial.printf("│ Dew Point:     %5.1f °C              │\n", dewPoint);
+    // Serial.printf("┌──────────── ENVIRONMENT #%d ───────────┐\n", sensorNum);
+    // Serial.printf("│ Temperature:   %5.1f °C              │\n", data.temperature);
+    // Serial.printf("│ Humidity:      %5.1f %%               │\n", data.humidity);
+    // Serial.printf("│ Dew Point:     %5.1f °C              │\n", dewPoint);
     
     if (data.temperature >= 27.0) {
-        Serial.printf("│ Heat Index:    %5.1f °C              │\n", heatIndex);
+        // Serial.printf("│ Heat Index:    %5.1f °C              │\n", heatIndex);
     }
     
-    Serial.printf("│ Abs. Humidity: %5.1f g/m³            │\n", absHumidity);
+    // Serial.printf("│ Abs. Humidity: %5.1f g/m³            │\n", absHumidity);
     
 
-    Serial.println("├──────────────────────────────────────┤");
-    Serial.printf("│ Temp Quality:  %-22s│\n", tempQuality.c_str());
-    Serial.printf("│ Hum Quality:   %-22s│\n", humQuality.c_str());
-    Serial.println("└──────────────────────────────────────┘");
+    // Serial.println("├──────────────────────────────────────┤");
+    // Serial.printf("│ Temp Quality:  %-22s│\n", tempQuality.c_str());
+    // Serial.printf("│ Hum Quality:   %-22s│\n", humQuality.c_str());
+    // Serial.println("└──────────────────────────────────────┘");
 }
 
 // ADD THIS FUNCTION TO VERIFY SDP810
 void verifySDP810() {
     if (!sensorManager) return;
     
-    Serial.println("\n╔════════════════════════════════════════╗");
-    Serial.println("║        VERIFYING SDP810 SENSOR        ║");
-    Serial.println("╚════════════════════════════════════════╝\n");
+    // Serial.println("\n╔════════════════════════════════════════╗");
+    // Serial.println("║        VERIFYING SDP810 SENSOR        ║");
+    // Serial.println("╚════════════════════════════════════════╝\n");
     
     // Use the SDP810 sensor from sensorManager
     if (sensorManager->isSDPActive()) {
-        Serial.println("[SDP810] Sensor detected at address 0x25");
+        // Serial.println("[SDP810] Sensor detected at address 0x25");
         
         // Try to read 5 times to verify
         int successfulReads = 0;
@@ -342,8 +343,8 @@ void verifySDP810() {
                     avgPressure += data.differential_pressure;
                     avgTemp += data.temperature;
                     
-                    Serial.printf("  Read #%d: Pressure=%+7.2f Pa, Temp=%6.2f°C\n", 
-                                 i+1, data.differential_pressure, data.temperature);
+                    // Serial.printf("  Read #%d: Pressure=%+7.2f Pa, Temp=%6.2f°C\n", 
+                    //              i+1, data.differential_pressure, data.temperature);
                 }
             }
             delay(500);
@@ -353,27 +354,27 @@ void verifySDP810() {
             avgPressure /= successfulReads;
             avgTemp /= successfulReads;
             
-            Serial.println("\n[VERIFICATION RESULTS]");
-            Serial.printf("  Successful reads: %d/5\n", successfulReads);
-            Serial.printf("  Average pressure: %+7.2f Pa\n", avgPressure);
-            Serial.printf("  Average temperature: %6.2f°C\n", avgTemp);
+            // Serial.println("\n[VERIFICATION RESULTS]");
+            // Serial.printf("  Successful reads: %d/5\n", successfulReads);
+            // Serial.printf("  Average pressure: %+7.2f Pa\n", avgPressure);
+            // Serial.printf("  Average temperature: %6.2f°C\n", avgTemp);
             
             // Check if values are reasonable
             bool tempReasonable = (avgTemp > -40 && avgTemp < 125);
             bool pressureReasonable = (abs(avgPressure) < 1000);
             
             if (tempReasonable && pressureReasonable) {
-                Serial.println("  ✓ SDP810 is WORKING CORRECTLY!");
+                // Serial.println("  ✓ SDP810 is WORKING CORRECTLY!");
                 sdp810Verified = true;
             } else {
                 if (!tempReasonable) Serial.println("  ✗ Temperature out of range!");
                 if (!pressureReasonable) Serial.println("  ✗ Pressure out of range!");
             }
         } else {
-            Serial.println("  ✗ Failed to read any valid data!");
+            // Serial.println("  ✗ Failed to read any valid data!");
         }
     } else {
-        Serial.println("  ✗ SDP810 sensor not detected!");
+        // Serial.println("  ✗ SDP810 sensor not detected!");
     }
     
     Serial.println("\n════════════════════════════════════════\n");
@@ -382,7 +383,12 @@ void verifySDP810() {
 void setup() {
     Serial.begin(115200);
     delay(2000);
-    
+
+    esp_task_wdt_init(15, true);   // configure watchdog, but don't subscribe yet
+    Serial.println("[System] Watchdog configured (15s timeout, not yet active)");
+          // subscribe the current (loop) task
+
+    Serial.println("[System] Watchdog initialized (15s timeout)");
     Serial.println("\n════════════════════════════════════════");
     Serial.println("    ESP32 AIR QUALITY MONITORING");
     Serial.println("    with ThingsBoard Gateway MQTT");
@@ -515,6 +521,8 @@ Serial.println("\n[System] Initializing WiFi and MQTT Gateway...");
     
     Serial.println("Starting measurements in 3 seconds...");
     delay(3000);
+    esp_task_wdt_add(NULL);
+    Serial.println("[System] Watchdog now active for main loop");
 }
 
 void loop() {
@@ -523,6 +531,9 @@ void loop() {
     static unsigned long lastReadTimeSGP = 0;
     static unsigned long lastSDP810SimpleRead = 0;
     
+    
+    esp_task_wdt_reset();
+
     if (!sensorManager) return;
     
     unsigned long now = millis();
@@ -560,7 +571,7 @@ void loop() {
         // Read other I2C sensors
         sensorManager->readSCD();
         sensorManager->readSFA1();
-        sensorManager->readSFA2();
+        // sensorManager->readSFA2();
         sensorManager->readSHT1();
         sensorManager->readSHT2();
         
@@ -661,8 +672,8 @@ void loop() {
         // Display SFA30 data
         if (sensorManager->isSFA1Active() && sensorManager->getSFA1Data().valid)
             printSFAData(sensorManager->getSFA1Data(), 1);
-        if (sensorManager->isSFA2Active() && sensorManager->getSFA2Data().valid)
-            printSFAData(sensorManager->getSFA2Data(), 2);
+        // if (sensorManager->isSFA2Active() && sensorManager->getSFA2Data().valid)
+        //     printSFAData(sensorManager->getSFA2Data(), 2);
         
         Serial.println();
         
